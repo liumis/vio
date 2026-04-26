@@ -1,6 +1,5 @@
 <?php
 
-use App\Http\Controllers\TempSqlImportController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/preview/email/violation', function () {
@@ -27,5 +26,3 @@ Route::get('/preview/email/password-reset', function () {
     ]);
 });
 
-Route::get('/temp-import-sql', [TempSqlImportController::class, 'show']);
-Route::post('/temp-import-sql', [TempSqlImportController::class, 'import']);
