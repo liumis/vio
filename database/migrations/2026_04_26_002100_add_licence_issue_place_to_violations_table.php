@@ -8,15 +8,19 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('violations', function (Blueprint $table): void {
-            $table->string('licence_issue_place')->nullable()->after('customer_paid');
-        });
+        if (! Schema::hasColumn('violations', 'licence_issue_place')) {
+            Schema::table('violations', function (Blueprint $table): void {
+                $table->string('licence_issue_place')->nullable()->after('customer_paid');
+            });
+        }
     }
 
     public function down(): void
     {
-        Schema::table('violations', function (Blueprint $table): void {
-            $table->dropColumn('licence_issue_place');
-        });
+        if (Schema::hasColumn('violations', 'licence_issue_place')) {
+            Schema::table('violations', function (Blueprint $table): void {
+                $table->dropColumn('licence_issue_place');
+            });
+        }
     }
 };
