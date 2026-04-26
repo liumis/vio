@@ -9,7 +9,7 @@
         .ok { background: #ecfdf5; border: 1px solid #10b981; padding: 10px; margin-bottom: 16px; }
         .err { background: #fef2f2; border: 1px solid #ef4444; padding: 10px; margin-bottom: 16px; }
         label { display: block; margin: 10px 0 6px; }
-        input[type="text"], input[type="file"] { width: 100%; padding: 8px; }
+        input[type="file"] { width: 100%; padding: 8px; }
         button { margin-top: 14px; padding: 8px 14px; }
     </style>
 </head>
@@ -31,9 +31,6 @@
 
     <form method="post" enctype="multipart/form-data">
         @csrf
-        <label for="token">Import token</label>
-        <input id="token" name="token" type="text" required>
-
         <label for="sql_file">SQL file</label>
         <input id="sql_file" name="sql_file" type="file" accept=".sql,.txt" required>
 

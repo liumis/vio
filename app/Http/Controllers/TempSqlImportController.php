@@ -16,16 +16,8 @@ class TempSqlImportController extends Controller
     public function import(Request $request)
     {
         $request->validate([
-            'token' => ['required', 'string'],
             'sql_file' => ['required', 'file', 'mimes:sql,txt', 'max:102400'],
         ]);
-
-        $expectedToken = (string) env('TEMP_IMPORT_TOKEN', '');
-        if ($expectedToken === '' || ! hash_equals($expectedToken, (string) $request->input('token'))) {
-            throw ValidationException::withMessages([
-                'token' => 'Invalid import token.',
-            ]);
-        }
 
         $sql = file_get_contents($request->file('sql_file')->getRealPath());
         if ($sql === false || trim($sql) === '') {
