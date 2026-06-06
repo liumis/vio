@@ -28,12 +28,8 @@ final class ViolationImportMapping
         'driver name' => 'driver',
         'ticket date' => 'ticket_date',
         'licence number' => 'driver_license',
-        'vairuotojo pažymėjimo nr' => 'driver_license',
         'vehicle' => 'vehicle',
         'birth date' => 'birth_date',
-        'gimimo data' => 'birth_date',
-        'asmens kodas' => 'driver_id_number',
-        'driver id number' => 'driver_id_number',
         'driver e-mail' => 'customer_email',
         'driver email' => 'customer_email',
         'driver address' => 'driver_address',
@@ -73,7 +69,6 @@ final class ViolationImportMapping
         'agr_no',
         'driver',
         'birth_date',
-        'driver_id_number',
         'customer_email',
         'driver_address',
         'driver_city',
@@ -94,7 +89,6 @@ final class ViolationImportMapping
         'agr_no',
         'driver',
         'birth_date',
-        'driver_id_number',
         'customer_email',
         'driver_address',
         'driver_city',
@@ -118,10 +112,9 @@ final class ViolationImportMapping
             'ticket_number' => 'Reference no',
             'driver' => 'Driver',
             'ticket_date' => 'Ticket date',
-            'driver_license' => 'Vairuotojo pažymėjimo Nr.',
+            'driver_license' => 'Licence Number',
             'vehicle' => 'Vehicle',
-            'birth_date' => 'Gimimo data',
-            'driver_id_number' => 'Asmens kodas',
+            'birth_date' => 'Birth date',
             'customer_email' => 'Driver E-mail',
             'driver_address' => 'Driver Address',
             'driver_telephone' => 'Driver Telephone',
@@ -204,32 +197,6 @@ final class ViolationImportMapping
         return $mapped;
     }
 
-    /**
-     * @param  array<string, mixed>  $mapped
-     * @return list<string>
-     */
-    public static function validateMappedAttributes(array $mapped, int $rowNumber): array
-    {
-        $errors = [];
-
-        $asmensKodas = $mapped['driver_id_number'] ?? null;
-        if (filled($asmensKodas) && ! preg_match('/^\d{11}$/', (string) $asmensKodas)) {
-            $errors[] = "Row {$rowNumber}: Asmens kodas must be exactly 11 digits.";
-        }
-
-        $birthDateError = DriverFieldValidator::birthDateError($mapped['birth_date'] ?? null);
-        if ($birthDateError !== null) {
-            $errors[] = "Row {$rowNumber}: {$birthDateError}";
-        }
-
-        $driverLicenseError = DriverFieldValidator::driverLicenseError($mapped['driver_license'] ?? null);
-        if ($driverLicenseError !== null) {
-            $errors[] = "Row {$rowNumber}: {$driverLicenseError}";
-        }
-
-        return $errors;
-    }
-
     private static function stringifyExcelValue(int|float $value): string
     {
         if (is_int($value) || $value == floor($value)) {
@@ -260,10 +227,6 @@ final class ViolationImportMapping
                 }
             }
 
-            if (in_array($column, ['driver_id_number', 'driver_license'], true) && is_numeric($trimmed)) {
-                return self::stringifyExcelValue((float) $trimmed);
-            }
-
             return $trimmed;
         }
 
@@ -274,10 +237,6 @@ final class ViolationImportMapping
                 } catch (\Throwable) {
                     return self::stringifyExcelValue($value);
                 }
-            }
-
-            if (in_array($column, ['driver_id_number', 'driver_license'], true)) {
-                return self::stringifyExcelValue($value);
             }
 
             return self::stringifyExcelValue($value);
