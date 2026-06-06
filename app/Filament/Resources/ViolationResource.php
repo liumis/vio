@@ -7,6 +7,8 @@ use App\Models\Violation;
 use App\Support\ActivityLogger;
 use App\Support\ViolationEmailSender;
 use App\Support\ViolationImportMapping;
+use Filament\Forms;
+use Filament\Forms\Get;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
@@ -60,10 +62,11 @@ class ViolationResource extends Resource
         return $table
             ->recordClasses(function (Violation $record): string {
                 $classes = 'text-[11px]';
+                $displayStatus = self::displayStatus($record);
 
-                if ($record->status === Violation::STATUS_NOT_SENT) {
+                if ($displayStatus === Violation::STATUS_NOT_SENT) {
                     $classes .= ' bg-red-50 hover:bg-red-50/90';
-                } elseif ($record->status === Violation::STATUS_FAILED) {
+                } elseif ($displayStatus === Violation::STATUS_FAILED) {
                     $classes .= ' bg-amber-50 hover:bg-amber-50/90';
                 }
 
@@ -74,24 +77,72 @@ class ViolationResource extends Resource
                     ->label('')
                     ->alignCenter()
                     ->icons([
-                        'heroicon-o-envelope' => Violation::STATUS_NOT_SENT,
-                        'heroicon-o-check-circle' => Violation::STATUS_SENT,
-                        'heroicon-o-x-circle' => Violation::STATUS_FAILED,
+                        'heroicon-o-envelope' => static fn (Violation $record): bool => self::displayStatus($record) === Violation::STATUS_NOT_SENT,
+                        'heroicon-o-check-circle' => static fn (Violation $record): bool => self::displayStatus($record) === Violation::STATUS_SENT,
+                        'heroicon-o-x-circle' => static fn (Violation $record): bool => self::displayStatus($record) === Violation::STATUS_FAILED,
                     ])
                     ->colors([
-                        'gray' => Violation::STATUS_NOT_SENT,
-                        'success' => Violation::STATUS_SENT,
-                        'danger' => Violation::STATUS_FAILED,
+                        'gray' => static fn (Violation $record): bool => self::displayStatus($record) === Violation::STATUS_NOT_SENT,
+                        'success' => static fn (Violation $record): bool => self::displayStatus($record) === Violation::STATUS_SENT,
+                        'danger' => static fn (Violation $record): bool => self::displayStatus($record) === Violation::STATUS_FAILED,
                     ])
-                    ->disabledClick(fn (Violation $record): bool => $record->status === Violation::STATUS_SENT)
-                    ->tooltip(fn (Violation $record): string => match ($record->status) {
+                    ->disabledClick(fn (Violation $record): bool => self::displayStatus($record) === Violation::STATUS_SENT)
+                    ->tooltip(fn (Violation $record): string => match (self::displayStatus($record)) {
                         Violation::STATUS_SENT => __('Sent'),
                         Violation::STATUS_FAILED => __('Failed (click to retry)'),
                         default => __('Send'),
                     })
                     ->action(
                         Action::make('send')
-                            ->requiresConfirmation()
+                            ->fillForm(function (Violation $record): array {
+                                $draft = app(ViolationEmailSender::class)->buildDraft($record);
+
+                                return [
+                                    'subject' => $draft['subject'],
+                                    'body' => $draft['body_text'],
+                                ];
+                            })
+                            ->form([
+                                Forms\Components\TextInput::make('subject')
+                                    ->label('Subject')
+                                    ->required()
+                                    ->live()
+                                    ->maxLength(255),
+                                Forms\Components\Textarea::make('body')
+                                    ->label('Template text (editable)')
+                                    ->required()
+                                    ->live()
+                                    ->rows(14)
+                                    ->columnSpanFull(),
+                                Forms\Components\FileUpload::make('attachment')
+                                    ->label('Attachment (optional)')
+                                    ->disk('local')
+                                    ->directory('email-attachments')
+                                    ->visibility('private')
+                                    ->preserveFilenames()
+                                    ->acceptedFileTypes([
+                                        'application/pdf',
+                                        'image/*',
+                                        'application/msword',
+                                        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                                        'application/vnd.ms-excel',
+                                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                        'text/plain',
+                                    ])
+                                    ->maxSize(10240),
+                                Forms\Components\Placeholder::make('template_preview')
+                                    ->label('Full email preview')
+                                    ->content(function (Get $get): HtmlString {
+                                        $subject = (string) ($get('subject') ?? '');
+                                        $body = (string) ($get('body') ?? '');
+                                        $html = app(ViolationEmailSender::class)->renderBrandedTemplate($subject, $body);
+
+                                        return new HtmlString(
+                                            '<div style="max-height: 360px; overflow: auto; border:1px solid #e5e7eb; border-radius:6px; background:#fff;">'.$html.'</div>'
+                                        );
+                                    })
+                                    ->columnSpanFull(),
+                            ])
                             ->modalHeading(__('Send?'))
                             ->modalDescription(function (Violation $record): HtmlString {
                                 $referenceNo = (string) ($record->ticket_number ?? '-');
@@ -105,14 +156,20 @@ class ViolationResource extends Resource
                                 );
                             })
                             ->modalSubmitActionLabel(__('Send'))
-                            ->action(function (Violation $record): void {
+                            ->action(function (Violation $record, array $data): void {
                                 try {
-                                    app(ViolationEmailSender::class)->send($record);
+                                    $draft = app(ViolationEmailSender::class)->send(
+                                        $record,
+                                        subjectOverride: (string) ($data['subject'] ?? ''),
+                                        bodyOverride: (string) ($data['body'] ?? ''),
+                                        attachmentPath: isset($data['attachment']) ? (string) $data['attachment'] : null,
+                                    );
 
                                     $record->update([
                                         'status' => Violation::STATUS_SENT,
                                         'send_error' => null,
                                     ]);
+                                    self::recordEmailAttempt($record, $draft, Violation::STATUS_SENT);
 
                                     Notification::make()
                                         ->success()
@@ -120,10 +177,24 @@ class ViolationResource extends Resource
                                         ->body('Notification sent to liumis@gmail.com.')
                                         ->send();
                                 } catch (Throwable $e) {
+                                    $draft = [
+                                        'subject' => (string) ($data['subject'] ?? ''),
+                                        'body' => app(ViolationEmailSender::class)->renderBrandedTemplate(
+                                            (string) ($data['subject'] ?? ''),
+                                            (string) ($data['body'] ?? '')
+                                        ),
+                                        'body_text' => (string) ($data['body'] ?? ''),
+                                        'to' => 'liumis@gmail.com',
+                                        'from_email' => '',
+                                        'from_name' => '',
+                                        'reply_to' => '',
+                                    ];
+
                                     $record->update([
                                         'status' => Violation::STATUS_FAILED,
                                         'send_error' => $e->getMessage(),
                                     ]);
+                                    self::recordEmailAttempt($record, $draft, Violation::STATUS_FAILED, $e->getMessage());
 
                                     ActivityLogger::log(
                                         sprintf(
@@ -151,12 +222,38 @@ class ViolationResource extends Resource
                                 }
                             })
                     ),
+                Tables\Columns\IconColumn::make('last_email_attempted_at')
+                    ->label('Mail')
+                    ->alignCenter()
+                    ->icons([
+                        'heroicon-o-document-magnifying-glass' => static fn (Violation $record): bool => ! blank($record->last_email_attempted_at),
+                    ])
+                    ->colors([
+                        'success' => static fn (Violation $record): bool => $record->last_email_status === Violation::STATUS_SENT,
+                        'danger' => static fn (Violation $record): bool => $record->last_email_status === Violation::STATUS_FAILED,
+                        'gray' => static fn (Violation $record): bool => blank($record->last_email_attempted_at),
+                    ])
+                    ->tooltip(static fn (Violation $record): string => blank($record->last_email_attempted_at) ? 'No send attempt yet' : 'View last email attempt')
+                    ->disabledClick(static fn (Violation $record): bool => blank($record->last_email_attempted_at))
+                    ->action(
+                        Action::make('view_last_email_attempt')
+                            ->modalHeading('Last email attempt')
+                            ->modalSubmitAction(false)
+                            ->modalCancelActionLabel('Close')
+                            ->modalContent(static fn (Violation $record): HtmlString => self::emailAttemptModalContent($record))
+                    ),
                 Tables\Columns\TextColumn::make('import_id')
                     ->label('Import #')
                     ->sortable(),
                 Tables\Columns\TextColumn::make('row_number')
                     ->label('Row')
                     ->sortable(),
+                Tables\Columns\TextColumn::make('last_email_sent_at')
+                    ->label('Sent at')
+                    ->dateTime('Y-m-d H:i:s')
+                    ->timezone('Europe/Vilnius')
+                    ->sortable()
+                    ->toggleable(),
                 ...$excelColumns,
                 Tables\Columns\TextColumn::make('created_at')
                     ->dateTime()
@@ -198,21 +295,32 @@ class ViolationResource extends Resource
                                 ->whereIn('status', [Violation::STATUS_NOT_SENT, Violation::STATUS_FAILED])
                                 ->each(function (Violation $record) use (&$sentCount, &$failedCount): void {
                                     try {
-                                        app(ViolationEmailSender::class)->send($record);
+                                        $draft = app(ViolationEmailSender::class)->send($record);
 
                                         $record->update([
                                             'status' => Violation::STATUS_SENT,
                                             'send_error' => null,
                                         ]);
+                                        self::recordEmailAttempt($record, $draft, Violation::STATUS_SENT);
 
                                         $sentCount++;
                                     } catch (Throwable $e) {
                                         $errorMessage = $e->getMessage();
+                                        $draft = [
+                                            'subject' => '',
+                                            'body' => '',
+                                            'body_text' => '',
+                                            'to' => 'liumis@gmail.com',
+                                            'from_email' => '',
+                                            'from_name' => '',
+                                            'reply_to' => '',
+                                        ];
 
                                         $record->update([
                                             'status' => Violation::STATUS_FAILED,
                                             'send_error' => $errorMessage,
                                         ]);
+                                        self::recordEmailAttempt($record, $draft, Violation::STATUS_FAILED, $errorMessage);
 
                                         ActivityLogger::log(
                                             sprintf(
@@ -278,5 +386,63 @@ class ViolationResource extends Resource
         $rest = array_values(array_diff(ViolationImportMapping::COLUMN_NAMES, $preferred));
 
         return [...$preferred, ...$rest];
+    }
+
+    /**
+     * @param array{subject:string,body:string,body_text:string,to:string,from_email:string,from_name:string,reply_to:string} $draft
+     */
+    private static function recordEmailAttempt(Violation $record, array $draft, string $status, ?string $error = null): void
+    {
+        $record->forceFill([
+            'last_email_subject' => $draft['subject'],
+            'last_email_body' => $draft['body'],
+            'last_email_to' => $draft['to'],
+            'last_email_from' => $draft['from_email'],
+            'last_email_reply_to' => $draft['reply_to'],
+            'last_email_status' => $status,
+            'last_email_error' => $error,
+            'last_email_attempted_at' => now(),
+            'last_email_sent_at' => $status === Violation::STATUS_SENT ? now() : null,
+        ])->save();
+    }
+
+    private static function emailAttemptModalContent(Violation $record): HtmlString
+    {
+        $attemptedAt = $record->last_email_attempted_at?->format('Y-m-d H:i:s') ?? '-';
+        $status = (string) ($record->last_email_status ?? '-');
+        $to = (string) ($record->last_email_to ?? '-');
+        $from = (string) ($record->last_email_from ?? '-');
+        $replyTo = (string) ($record->last_email_reply_to ?? '-');
+        $subject = (string) ($record->last_email_subject ?? '-');
+        $body = (string) ($record->last_email_body ?? '');
+        $error = (string) ($record->last_email_error ?? '');
+
+        $errorBlock = $error !== ''
+            ? '<br><strong>Error:</strong><br><span style="color:#b91c1c;">'.e($error).'</span>'
+            : '';
+
+        return new HtmlString(
+            '<strong>Attempted at:</strong> '.e($attemptedAt).'<br>'.
+            '<strong>Status:</strong> '.e($status).'<br>'.
+            '<strong>To:</strong> '.e($to).'<br>'.
+            '<strong>From:</strong> '.e($from).'<br>'.
+            '<strong>Reply-To:</strong> '.e($replyTo).'<br>'.
+            '<strong>Subject:</strong> '.e($subject).'<br><br>'.
+            '<strong>Body:</strong><br><div style="max-height: 360px; overflow:auto; border:1px solid #e5e7eb; padding:10px; border-radius:6px; background:#fff;">'.$body.'</div>'.
+            $errorBlock
+        );
+    }
+
+    private static function displayStatus(Violation $record): string
+    {
+        if ($record->last_email_status === Violation::STATUS_FAILED) {
+            return Violation::STATUS_FAILED;
+        }
+
+        if ($record->last_email_status === Violation::STATUS_SENT) {
+            return Violation::STATUS_SENT;
+        }
+
+        return (string) $record->status;
     }
 }

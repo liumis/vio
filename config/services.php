@@ -23,4 +23,11 @@ return [
         ],
     ],
 
+    'microsoft_o365' => [
+        'enabled' => env('O365_MAIL_ENABLED', false),
+        'tenant_id' => env('O365_TENANT_ID'),
+        'client_id' => env('O365_CLIENT_ID'),
+        'client_secret' => env('O365_CLIENT_SECRET'),
+    ],
+
 ];

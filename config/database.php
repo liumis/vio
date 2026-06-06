@@ -19,6 +19,13 @@ return [
             'synchronous' => null,
         ],
 
+        'sqlite_import' => [
+            'driver' => 'sqlite',
+            'database' => env('SQLITE_IMPORT_PATH', database_path('database.sqlite')),
+            'prefix' => '',
+            'foreign_key_constraints' => false,
+        ],
+
         'mysql' => [
             'driver' => 'mysql',
             'url' => env('DB_URL'),

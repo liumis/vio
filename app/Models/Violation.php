@@ -65,6 +65,15 @@ class Violation extends Model
         'row_data',
         'status',
         'send_error',
+        'last_email_subject',
+        'last_email_body',
+        'last_email_to',
+        'last_email_from',
+        'last_email_reply_to',
+        'last_email_status',
+        'last_email_error',
+        'last_email_attempted_at',
+        'last_email_sent_at',
         ...ViolationImportMapping::COLUMN_NAMES,
     ];
 
@@ -72,6 +81,8 @@ class Violation extends Model
     {
         return [
             'row_data' => 'array',
+            'last_email_attempted_at' => 'datetime',
+            'last_email_sent_at' => 'datetime',
         ];
     }
 

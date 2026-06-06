@@ -30,8 +30,6 @@ class EmailSettings extends Page implements HasForms
 
         $this->form->fill([
             'from_name' => $settings?->from_name,
-            'from_email' => $settings?->from_email,
-            'reply_to' => $settings?->reply_to,
             'subject' => $settings?->subject,
         ]);
     }
@@ -42,14 +40,6 @@ class EmailSettings extends Page implements HasForms
             ->schema([
                 Forms\Components\TextInput::make('from_name')
                     ->label('From')
-                    ->maxLength(255),
-                Forms\Components\TextInput::make('from_email')
-                    ->label('From email')
-                    ->email()
-                    ->maxLength(255),
-                Forms\Components\TextInput::make('reply_to')
-                    ->label('Reply-to')
-                    ->email()
                     ->maxLength(255),
                 Forms\Components\TextInput::make('subject')
                     ->label('Subject')

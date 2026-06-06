@@ -143,5 +143,26 @@ class CreateImport extends CreateRecord
                 'data.file_path' => "Required mapped fields contain empty values: {$details}.",
             ]);
         }
+
+        $validationErrors = [];
+
+        foreach ($rows as $row) {
+            $mapped = ViolationImportMapping::mapRowToAttributes($row['row_data']);
+            $validationErrors = array_merge(
+                $validationErrors,
+                ViolationImportMapping::validateMappedAttributes($mapped, $row['row_number'])
+            );
+        }
+
+        if ($validationErrors !== []) {
+            $preview = implode(' ', array_slice($validationErrors, 0, 5));
+            if (count($validationErrors) > 5) {
+                $preview .= ' ...';
+            }
+
+            throw ValidationException::withMessages([
+                'data.file_path' => $preview,
+            ]);
+        }
     }
 }

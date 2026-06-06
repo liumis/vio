@@ -4,11 +4,13 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\ActivityLogResource\Pages;
 use App\Models\ActivityLog;
+use App\Models\Violation;
 use Filament\Forms\Components\DatePicker;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Illuminate\Database\Eloquent\Builder;
 use Filament\Tables\Table;
+use Illuminate\Support\HtmlString;
 
 class ActivityLogResource extends Resource
 {
@@ -78,7 +80,9 @@ class ActivityLogResource extends Resource
                 Tables\Columns\TextColumn::make('action')
                     ->label('Action')
                     ->searchable()
-                    ->wrap(),
+                    ->wrap()
+                    ->url(fn (ActivityLog $record): ?string => self::violationIndexUrl($record), shouldOpenInNewTab: true)
+                    ->color(fn (ActivityLog $record): ?string => self::violationIndexUrl($record) ? 'primary' : null),
             ])
             ->filters([
                 Tables\Filters\SelectFilter::make('event_type')
@@ -118,7 +122,16 @@ class ActivityLogResource extends Resource
                             ->when($data['until'] ?? null, fn (Builder $q, $date): Builder => $q->whereDate('created_at', '<=', $date));
                     }),
             ])
-            ->actions([])
+            ->actions([
+                Tables\Actions\Action::make('view_sent_email')
+                    ->label('Email')
+                    ->icon('heroicon-o-envelope-open')
+                    ->visible(fn (ActivityLog $record): bool => self::relatedViolation($record) !== null)
+                    ->modalHeading('Email from this log entry')
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('Close')
+                    ->modalContent(fn (ActivityLog $record): HtmlString => self::sentEmailModalContent($record)),
+            ])
             ->bulkActions([]);
     }
 
@@ -127,5 +140,48 @@ class ActivityLogResource extends Resource
         return [
             'index' => Pages\ListActivityLogs::route('/'),
         ];
+    }
+
+    private static function relatedViolation(ActivityLog $record): ?Violation
+    {
+        $violationId = (int) ($record->meta['violation_id'] ?? 0);
+        if ($violationId <= 0) {
+            return null;
+        }
+
+        return Violation::query()->find($violationId);
+    }
+
+    private static function violationIndexUrl(ActivityLog $record): ?string
+    {
+        $violation = self::relatedViolation($record);
+        if (! $violation) {
+            return null;
+        }
+
+        return ViolationResource::getUrl('index', ['import_id' => $violation->import_id]);
+    }
+
+    private static function sentEmailModalContent(ActivityLog $record): HtmlString
+    {
+        $violation = self::relatedViolation($record);
+
+        if (! $violation) {
+            return new HtmlString('<em>Violation not found for this log entry.</em>');
+        }
+
+        $status = (string) ($violation->last_email_status ?? '-');
+        $sentAt = $violation->last_email_sent_at?->timezone('Europe/Vilnius')->format('Y-m-d H:i:s') ?? '-';
+        $to = (string) ($violation->last_email_to ?? '-');
+        $subject = (string) ($violation->last_email_subject ?? '-');
+        $body = (string) ($violation->last_email_body ?? '');
+
+        return new HtmlString(
+            '<strong>Status:</strong> '.e($status).'<br>'.
+            '<strong>Sent at:</strong> '.e($sentAt).'<br>'.
+            '<strong>To:</strong> '.e($to).'<br>'.
+            '<strong>Subject:</strong> '.e($subject).'<br><br>'.
+            '<strong>Body:</strong><br><div style="max-height: 360px; overflow:auto; border:1px solid #e5e7eb; padding:10px; border-radius:6px; background:#fff;">'.$body.'</div>'
+        );
     }
 }

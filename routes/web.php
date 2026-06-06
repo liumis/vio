@@ -1,6 +1,10 @@
 <?php
 
+use App\Http\Controllers\DriverInfoController;
 use Illuminate\Support\Facades\Route;
+
+Route::get('/driver-info', [DriverInfoController::class, 'create'])->name('driver-info.create');
+Route::post('/driver-info', [DriverInfoController::class, 'store'])->name('driver-info.store');
 
 Route::get('/preview/email/violation', function () {
     return view('emails.violation-notification', [
