@@ -20,6 +20,7 @@ class Import extends Model
 
     protected $fillable = [
         'file_path',
+        'birth_date_file_path',
         'imported_rows',
         'imported_at',
         'user_id',

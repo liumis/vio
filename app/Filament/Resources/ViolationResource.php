@@ -46,28 +46,48 @@ class ViolationResource extends Resource
         $labels = ViolationImportMapping::columnLabels();
         $defaultVisible = ViolationImportMapping::DEFAULT_TABLE_VISIBLE_COLUMNS;
         $columnOrder = self::violationTableColumnOrder();
+        $afterSentAtColumns = ['driver', 'birth_date', 'customer_email'];
+        $remainingColumnOrder = array_values(array_filter(
+            $columnOrder,
+            fn (string $column): bool => ! in_array($column, $afterSentAtColumns, true)
+        ));
 
-        $excelColumns = [];
-        foreach ($columnOrder as $column) {
+        $makeExcelColumn = static function (string $column) use ($labels, $defaultVisible): Tables\Columns\TextColumn {
             $isDefaultVisible = in_array($column, $defaultVisible, true);
 
-            $excelColumns[] = Tables\Columns\TextColumn::make($column)
+            return Tables\Columns\TextColumn::make($column)
                 ->label($labels[$column] ?? $column)
                 ->searchable()
                 ->sortable()
                 ->toggleable($isDefaultVisible === false, isToggledHiddenByDefault: true)
                 ->wrap();
-        }
+        };
+
+        $afterSentAtExcelColumns = array_map(
+            static function (string $column) use ($labels, $defaultVisible, $makeExcelColumn): Tables\Columns\TextColumn {
+                if ($column === 'birth_date') {
+                    return self::makeBirthDateColumn($labels, $defaultVisible);
+                }
+
+                return $makeExcelColumn($column);
+            },
+            array_values(array_filter(
+                $afterSentAtColumns,
+                fn (string $column): bool => in_array($column, $columnOrder, true)
+            ))
+        );
+
+        $excelColumns = array_map($makeExcelColumn, $remainingColumnOrder);
 
         return $table
             ->recordClasses(function (Violation $record): string {
                 $classes = 'text-[11px]';
                 $displayStatus = self::displayStatus($record);
 
-                if ($displayStatus === Violation::STATUS_NOT_SENT) {
-                    $classes .= ' bg-red-50 hover:bg-red-50/90';
+                if (blank($record->birth_date)) {
+                    $classes .= ' violation-missing-birth-date';
                 } elseif ($displayStatus === Violation::STATUS_FAILED) {
-                    $classes .= ' bg-amber-50 hover:bg-amber-50/90';
+                    $classes .= ' violation-email-failed';
                 }
 
                 return $classes;
@@ -254,6 +274,7 @@ class ViolationResource extends Resource
                     ->timezone('Europe/Vilnius')
                     ->sortable()
                     ->toggleable(),
+                ...$afterSentAtExcelColumns,
                 ...$excelColumns,
                 Tables\Columns\TextColumn::make('created_at')
                     ->dateTime()
@@ -265,6 +286,17 @@ class ViolationResource extends Resource
                     ->searchable(),
             ])
             ->filters([
+                Tables\Filters\TernaryFilter::make('birth_date')
+                    ->label('Birth date')
+                    ->nullable()
+                    ->trueLabel('Has birth date')
+                    ->falseLabel('Missing birth date')
+                    ->queries(
+                        true: fn (Builder $query): Builder => $query->whereNotNull('birth_date')->where('birth_date', '!=', ''),
+                        false: fn (Builder $query): Builder => $query->where(function (Builder $query): void {
+                            $query->whereNull('birth_date')->orWhere('birth_date', '');
+                        }),
+                    ),
                 Tables\Filters\SelectFilter::make('status')
                     ->label(__('Status'))
                     ->options([
@@ -375,6 +407,50 @@ class ViolationResource extends Resource
     public static function canDeleteAny(): bool
     {
         return false;
+    }
+
+    /**
+     * @param  array<string, string>  $labels
+     * @param  list<string>  $defaultVisible
+     */
+    private static function makeBirthDateColumn(array $labels, array $defaultVisible): Tables\Columns\TextColumn
+    {
+        $isDefaultVisible = in_array('birth_date', $defaultVisible, true);
+
+        return Tables\Columns\TextColumn::make('birth_date')
+            ->label($labels['birth_date'] ?? 'Birth date')
+            ->searchable()
+            ->sortable()
+            ->toggleable($isDefaultVisible === false, isToggledHiddenByDefault: true)
+            ->wrap()
+            ->date('Y-m-d')
+            ->placeholder('—')
+            ->color(fn (Violation $record): string => blank($record->birth_date) ? 'danger' : 'gray')
+            ->tooltip(fn (Violation $record): ?string => blank($record->birth_date) ? __('Click to add birth date') : null)
+            ->disabledClick(fn (Violation $record): bool => filled($record->birth_date))
+            ->action(
+                Action::make('set_birth_date')
+                    ->modalHeading(__('Add birth date'))
+                    ->modalSubmitActionLabel(__('Save'))
+                    ->form([
+                        Forms\Components\DatePicker::make('birth_date')
+                            ->label($labels['birth_date'] ?? 'Birth date')
+                            ->required()
+                            ->native(false)
+                            ->displayFormat('Y-m-d')
+                            ->closeOnDateSelection(),
+                    ])
+                    ->action(function (Violation $record, array $data): void {
+                        $record->update([
+                            'birth_date' => $data['birth_date'],
+                        ]);
+
+                        Notification::make()
+                            ->success()
+                            ->title(__('Birth date saved'))
+                            ->send();
+                    })
+            );
     }
 
     /**

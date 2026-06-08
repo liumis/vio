@@ -25,7 +25,9 @@ final class ViolationImportMapping
      */
     private const NORMALIZED_HEADER_TO_COLUMN = [
         'reference no' => 'ticket_number',
+        'ticket number' => 'ticket_number',
         'driver name' => 'driver',
+        'driver' => 'driver',
         'ticket date' => 'ticket_date',
         'licence number' => 'driver_license',
         'vehicle' => 'vehicle',
@@ -38,6 +40,8 @@ final class ViolationImportMapping
         'driver country' => 'driver_country',
         'driver city' => 'driver_city',
         'rental agreement' => 'agr_no',
+        'agr. no' => 'agr_no',
+        'agr no' => 'agr_no',
         'customer paid' => 'customer_paid',
         'licence issue place' => 'licence_issue_place',
         'agent' => 'agent',

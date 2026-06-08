@@ -25,7 +25,19 @@ class ImportResource extends Resource
     {
         return $form->schema([
             Forms\Components\FileUpload::make('file_path')
-                ->label('Excel File')
+                ->label('Violations Excel file')
+                ->helperText('Main violation data (ticket number, ticket date, driver, rental agreement, vehicle).')
+                ->disk('local')
+                ->directory('imports')
+                ->acceptedFileTypes([
+                    'text/csv',
+                    'application/vnd.ms-excel',
+                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                ])
+                ->required(),
+            Forms\Components\FileUpload::make('birth_date_file_path')
+                ->label('Birth date Excel file')
+                ->helperText('Birth dates are matched by vehicle, ticket date, and driver. Rows without a match are still imported and shown in red.')
                 ->disk('local')
                 ->directory('imports')
                 ->acceptedFileTypes([
@@ -49,8 +61,12 @@ class ImportResource extends Resource
                 Tables\Columns\TextColumn::make('id')
                     ->sortable(),
                 Tables\Columns\TextColumn::make('file_path')
-                    ->label('File')
+                    ->label('Violations file')
                     ->searchable(),
+                Tables\Columns\TextColumn::make('birth_date_file_path')
+                    ->label('Birth date file')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('imported_rows')
                     ->label('Rows Imported')
                     ->sortable(),
