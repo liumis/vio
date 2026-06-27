@@ -114,55 +114,8 @@ class ViolationResource extends Resource
                     })
                     ->action(
                         Action::make('send')
-                            ->fillForm(function (Violation $record): array {
-                                $draft = app(ViolationEmailSender::class)->buildDraft($record);
-
-                                return [
-                                    'subject' => $draft['subject'],
-                                    'body' => $draft['body_text'],
-                                ];
-                            })
-                            ->form([
-                                Forms\Components\TextInput::make('subject')
-                                    ->label('Subject')
-                                    ->required()
-                                    ->live()
-                                    ->maxLength(255),
-                                Forms\Components\Textarea::make('body')
-                                    ->label('Template text (editable)')
-                                    ->required()
-                                    ->live()
-                                    ->rows(14)
-                                    ->columnSpanFull(),
-                                Forms\Components\FileUpload::make('attachment')
-                                    ->label('Attachment (optional)')
-                                    ->disk('local')
-                                    ->directory('email-attachments')
-                                    ->visibility('private')
-                                    ->preserveFilenames()
-                                    ->acceptedFileTypes([
-                                        'application/pdf',
-                                        'image/*',
-                                        'application/msword',
-                                        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                                        'application/vnd.ms-excel',
-                                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                                        'text/plain',
-                                    ])
-                                    ->maxSize(10240),
-                                Forms\Components\Placeholder::make('template_preview')
-                                    ->label('Full email preview')
-                                    ->content(function (Get $get): HtmlString {
-                                        $subject = (string) ($get('subject') ?? '');
-                                        $body = (string) ($get('body') ?? '');
-                                        $html = app(ViolationEmailSender::class)->renderBrandedTemplate($subject, $body);
-
-                                        return new HtmlString(
-                                            '<div style="max-height: 360px; overflow: auto; border:1px solid #e5e7eb; border-radius:6px; background:#fff;">'.$html.'</div>'
-                                        );
-                                    })
-                                    ->columnSpanFull(),
-                            ])
+                            ->fillForm(fn (Violation $record): array => self::emailDraftFormData($record))
+                            ->form(self::emailEditorFormSchema())
                             ->modalHeading(__('Send?'))
                             ->modalDescription(function (Violation $record): HtmlString {
                                 $referenceNo = (string) ($record->ticket_number ?? '-');
@@ -177,69 +130,28 @@ class ViolationResource extends Resource
                             })
                             ->modalSubmitActionLabel(__('Send'))
                             ->action(function (Violation $record, array $data): void {
-                                try {
-                                    $draft = app(ViolationEmailSender::class)->send(
-                                        $record,
-                                        subjectOverride: (string) ($data['subject'] ?? ''),
-                                        bodyOverride: (string) ($data['body'] ?? ''),
-                                        attachmentPath: isset($data['attachment']) ? (string) $data['attachment'] : null,
-                                    );
-
-                                    $record->update([
-                                        'status' => Violation::STATUS_SENT,
-                                        'send_error' => null,
-                                    ]);
-                                    self::recordEmailAttempt($record, $draft, Violation::STATUS_SENT);
-
-                                    Notification::make()
-                                        ->success()
-                                        ->title('Email sent')
-                                        ->body('Notification sent to liumis@gmail.com.')
-                                        ->send();
-                                } catch (Throwable $e) {
-                                    $draft = [
-                                        'subject' => (string) ($data['subject'] ?? ''),
-                                        'body' => app(ViolationEmailSender::class)->renderBrandedTemplate(
-                                            (string) ($data['subject'] ?? ''),
-                                            (string) ($data['body'] ?? '')
-                                        ),
-                                        'body_text' => (string) ($data['body'] ?? ''),
-                                        'to' => 'liumis@gmail.com',
-                                        'from_email' => '',
-                                        'from_name' => '',
-                                        'reply_to' => '',
-                                    ];
-
-                                    $record->update([
-                                        'status' => Violation::STATUS_FAILED,
-                                        'send_error' => $e->getMessage(),
-                                    ]);
-                                    self::recordEmailAttempt($record, $draft, Violation::STATUS_FAILED, $e->getMessage());
-
-                                    ActivityLogger::log(
-                                        sprintf(
-                                            'Violation email FAIL: %s | Driver: %s | Email: %s | Car plate: %s | Error: %s (Import #%s, Row %s)',
-                                            (string) ($record->ticket_number ?? $record->id),
-                                            (string) ($record->driver ?? '-'),
-                                            (string) ($record->customer_email ?? '-'),
-                                            (string) ($record->vehicle ?? $record->driver_license ?? '-'),
-                                            $e->getMessage(),
-                                            (string) $record->import_id,
-                                            (string) $record->row_number
-                                        ),
-                                        meta: [
-                                            'violation_id' => $record->id,
-                                            'send_status' => Violation::STATUS_FAILED,
-                                            'send_error' => $e->getMessage(),
-                                        ]
-                                    );
-
-                                    Notification::make()
-                                        ->danger()
-                                        ->title('Email not sent')
-                                        ->body($e->getMessage())
-                                        ->send();
-                                }
+                                self::sendViolationEmail($record, $data);
+                            })
+                    ),
+                Tables\Columns\IconColumn::make('preview')
+                    ->label('')
+                    ->alignCenter()
+                    ->getStateUsing(static fn (): bool => true)
+                    ->icons([
+                        'heroicon-o-eye' => static fn (): bool => true,
+                    ])
+                    ->color('primary')
+                    ->tooltip(__('Preview & send email'))
+                    ->action(
+                        Action::make('preview_email')
+                            ->modalHeading(__('Email preview'))
+                            ->modalWidth('3xl')
+                            ->fillForm(fn (Violation $record): array => self::emailDraftFormData($record))
+                            ->form(self::emailEditorFormSchema())
+                            ->modalSubmitActionLabel(__('Send'))
+                            ->modalCancelActionLabel(__('Close'))
+                            ->action(function (Violation $record, array $data): void {
+                                self::sendViolationEmail($record, $data);
                             })
                     ),
                 Tables\Columns\IconColumn::make('last_email_attempted_at')
@@ -423,22 +335,22 @@ class ViolationResource extends Resource
             ->sortable()
             ->toggleable($isDefaultVisible === false, isToggledHiddenByDefault: true)
             ->wrap()
-            ->date('Y-m-d')
-            ->placeholder('—')
-            ->color(fn (Violation $record): string => blank($record->birth_date) ? 'danger' : 'gray')
+            ->html()
+            ->state(fn (Violation $record): string => filled($record->birth_date)
+                ? (string) $record->birth_date
+                : self::birthDateAddAffordance())
             ->tooltip(fn (Violation $record): ?string => blank($record->birth_date) ? __('Click to add birth date') : null)
             ->disabledClick(fn (Violation $record): bool => filled($record->birth_date))
             ->action(
                 Action::make('set_birth_date')
                     ->modalHeading(__('Add birth date'))
                     ->modalSubmitActionLabel(__('Save'))
+                    ->modalWidth('sm')
                     ->form([
                         Forms\Components\DatePicker::make('birth_date')
                             ->label($labels['birth_date'] ?? 'Birth date')
                             ->required()
-                            ->native(false)
-                            ->displayFormat('Y-m-d')
-                            ->closeOnDateSelection(),
+                            ->format('Y-m-d'),
                     ])
                     ->action(function (Violation $record, array $data): void {
                         $record->update([
@@ -453,6 +365,21 @@ class ViolationResource extends Resource
             );
     }
 
+    private static function birthDateAddAffordance(): string
+    {
+        $label = __('Add');
+
+        return <<<HTML
+<span style="display:inline-flex;align-items:center;gap:4px;color:#dc2626;cursor:pointer;font-weight:600;">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.6" stroke="currentColor" style="width:16px;height:16px;flex:none;">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5M12 12.75h.008v.008H12v-.008Z" />
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 14.25v3m1.5-1.5h-3" />
+    </svg>
+    {$label}
+</span>
+HTML;
+    }
+
     /**
      * @return list<string>
      */
@@ -462,6 +389,144 @@ class ViolationResource extends Resource
         $rest = array_values(array_diff(ViolationImportMapping::COLUMN_NAMES, $preferred));
 
         return [...$preferred, ...$rest];
+    }
+
+    /**
+     * @return array<int, \Filament\Forms\Components\Component>
+     */
+    private static function emailEditorFormSchema(): array
+    {
+        return [
+            Forms\Components\TextInput::make('subject')
+                ->label('Subject')
+                ->required()
+                ->live()
+                ->maxLength(255),
+            Forms\Components\Textarea::make('body')
+                ->label('Template text (editable)')
+                ->required()
+                ->live()
+                ->rows(14)
+                ->columnSpanFull(),
+            Forms\Components\FileUpload::make('attachment')
+                ->label('Attachment (optional)')
+                ->disk('local')
+                ->directory('email-attachments')
+                ->visibility('private')
+                ->preserveFilenames()
+                ->acceptedFileTypes([
+                    'application/pdf',
+                    'image/*',
+                    'application/msword',
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    'application/vnd.ms-excel',
+                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    'text/plain',
+                ])
+                ->maxSize(10240),
+            Forms\Components\Placeholder::make('template_preview')
+                ->label('Full email preview')
+                ->content(function (Get $get): HtmlString {
+                    $subject = (string) ($get('subject') ?? '');
+                    $body = (string) ($get('body') ?? '');
+                    $html = app(ViolationEmailSender::class)->renderBrandedTemplate($subject, $body);
+
+                    return new HtmlString(
+                        '<div style="max-height: 360px; overflow: auto; border:1px solid #e5e7eb; border-radius:6px; background:#fff;">'.$html.'</div>'
+                    );
+                })
+                ->columnSpanFull(),
+        ];
+    }
+
+    /**
+     * @return array{subject: string, body: string}
+     */
+    private static function emailDraftFormData(Violation $record): array
+    {
+        try {
+            $draft = app(ViolationEmailSender::class)->buildDraft($record);
+
+            return [
+                'subject' => $draft['subject'],
+                'body' => $draft['body_text'],
+            ];
+        } catch (Throwable) {
+            return [
+                'subject' => '',
+                'body' => '',
+            ];
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    private static function sendViolationEmail(Violation $record, array $data): void
+    {
+        try {
+            $draft = app(ViolationEmailSender::class)->send(
+                $record,
+                subjectOverride: (string) ($data['subject'] ?? ''),
+                bodyOverride: (string) ($data['body'] ?? ''),
+                attachmentPath: isset($data['attachment']) ? (string) $data['attachment'] : null,
+            );
+
+            $record->update([
+                'status' => Violation::STATUS_SENT,
+                'send_error' => null,
+            ]);
+            self::recordEmailAttempt($record, $draft, Violation::STATUS_SENT);
+
+            Notification::make()
+                ->success()
+                ->title('Email sent')
+                ->body('Notification sent to liumis@gmail.com.')
+                ->send();
+        } catch (Throwable $e) {
+            $draft = [
+                'subject' => (string) ($data['subject'] ?? ''),
+                'body' => app(ViolationEmailSender::class)->renderBrandedTemplate(
+                    (string) ($data['subject'] ?? ''),
+                    (string) ($data['body'] ?? '')
+                ),
+                'body_text' => (string) ($data['body'] ?? ''),
+                'to' => 'liumis@gmail.com',
+                'from_email' => '',
+                'from_name' => '',
+                'reply_to' => '',
+            ];
+
+            $record->update([
+                'status' => Violation::STATUS_FAILED,
+                'send_error' => $e->getMessage(),
+            ]);
+            self::recordEmailAttempt($record, $draft, Violation::STATUS_FAILED, $e->getMessage());
+
+            ActivityLogger::log(
+                sprintf(
+                    'Violation email FAIL: %s | Driver: %s | Email: %s | Car plate: %s | Error: %s (Import #%s, Row %s)',
+                    (string) ($record->ticket_number ?? $record->id),
+                    (string) ($record->driver ?? '-'),
+                    (string) ($record->customer_email ?? '-'),
+                    (string) ($record->vehicle ?? $record->driver_license ?? '-'),
+                    $e->getMessage(),
+                    (string) $record->import_id,
+                    (string) $record->row_number
+                ),
+                meta: [
+                    'violation_id' => $record->id,
+                    'send_status' => Violation::STATUS_FAILED,
+                    'send_error' => $e->getMessage(),
+                ]
+            );
+
+            Notification::make()
+                ->danger()
+                ->title('Email not sent')
+                ->body($e->getMessage())
+                ->send();
+        }
     }
 
     /**

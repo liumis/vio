@@ -23,14 +23,23 @@ class CreateImport extends CreateRecord
 
     private int $missingBirthDateCount = 0;
 
+    private bool $filesAutoSwapped = false;
+
     protected function mutateFormDataBeforeCreate(array $data): array
     {
         $data['user_id'] = auth()->id();
 
         $primaryExtracted = $this->extractRowsFromExcel($data['file_path']);
-        $this->validateRequiredImportColumns($primaryExtracted['headers'], $primaryExtracted['rows'], 'data.file_path');
-
         $birthDateExtracted = $this->extractRowsFromExcel($data['birth_date_file_path']);
+
+        // Auto-correct when the two files were uploaded into the wrong fields.
+        if ($this->shouldSwapFiles($primaryExtracted, $birthDateExtracted)) {
+            [$data['file_path'], $data['birth_date_file_path']] = [$data['birth_date_file_path'], $data['file_path']];
+            [$primaryExtracted, $birthDateExtracted] = [$birthDateExtracted, $primaryExtracted];
+            $this->filesAutoSwapped = true;
+        }
+
+        $this->validateRequiredImportColumns($primaryExtracted['headers'], $primaryExtracted['rows'], 'data.file_path');
         $this->validateBirthDateFileColumns($birthDateExtracted['headers'], $birthDateExtracted['rows']);
 
         $birthDateLookup = ViolationBirthDateMerger::buildBirthDateLookup($birthDateExtracted['rows']);
@@ -39,6 +48,58 @@ class CreateImport extends CreateRecord
         $data['imported_rows'] = count($this->rowsToImport);
 
         return $data;
+    }
+
+    /**
+     * @param  array{headers: array<int, string>, rows: array<int, mixed>}  $primary
+     * @param  array{headers: array<int, string>, rows: array<int, mixed>}  $birthDate
+     */
+    private function shouldSwapFiles(array $primary, array $birthDate): bool
+    {
+        // Keep the user's order if it is already a valid combination.
+        if ($this->qualifiesAsPrimary($primary['headers']) && $this->qualifiesAsBirthDate($birthDate['headers'])) {
+            return false;
+        }
+
+        // Swap only if the reverse order is a valid combination.
+        return $this->qualifiesAsPrimary($birthDate['headers'])
+            && $this->qualifiesAsBirthDate($primary['headers']);
+    }
+
+    /**
+     * @param  array<int, string>  $headers
+     */
+    private function qualifiesAsPrimary(array $headers): bool
+    {
+        $mapped = ViolationImportMapping::mapHeadersToColumns($headers);
+
+        foreach (ViolationImportMapping::REQUIRED_COLUMNS as $column) {
+            if (! isset($mapped[$column])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  array<int, string>  $headers
+     */
+    private function qualifiesAsBirthDate(array $headers): bool
+    {
+        $mapped = ViolationImportMapping::mapHeadersToColumns($headers);
+
+        if (! isset($mapped['birth_date'])) {
+            return false;
+        }
+
+        foreach (ViolationBirthDateMerger::MERGE_KEY_COLUMNS as $column) {
+            if (! isset($mapped[$column])) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     protected function afterCreate(): void
@@ -62,6 +123,10 @@ class CreateImport extends CreateRecord
     protected function getCreatedNotification(): ?Notification
     {
         $body = "{$this->record->imported_rows} rows imported into violations.";
+
+        if ($this->filesAutoSwapped) {
+            $body .= ' The two files were uploaded in the wrong fields, so they were swapped automatically.';
+        }
 
         if ($this->missingBirthDateCount > 0) {
             $body .= " {$this->missingBirthDateCount} rows without birth date (shown in red in the violations list).";

@@ -46,6 +46,8 @@ final class ViolationImportMapping
         'licence issue place' => 'licence_issue_place',
         'agent' => 'agent',
         'authority email' => 'authority_email',
+        'authority name' => 'authority_email',
+        'issuing authority' => 'authority_email',
     ];
 
     /**

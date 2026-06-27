@@ -2,7 +2,6 @@
 
 namespace App\Support;
 
-use App\Models\Authority;
 use App\Models\EmailSetting;
 use App\Models\Violation;
 use App\Support\MicrosoftGraphMailer;
@@ -26,12 +25,14 @@ class ViolationEmailSender
             throw new RuntimeException('Authority Email is empty on this violation.');
         }
 
-        $authority = Authority::query()
-            ->whereRaw('LOWER(main_email) = ?', [mb_strtolower($authorityEmail)])
-            ->first();
+        $authority = AuthorityMatcher::findForEmail($authorityEmail);
 
         if (! $authority) {
-            throw new RuntimeException("No authority found for Authority Email: {$authorityEmail}");
+            $domain = AuthorityMatcher::domainOf($authorityEmail);
+
+            throw new RuntimeException(
+                "No authority matches the email pattern for: {$authorityEmail} (domain: {$domain})."
+            );
         }
 
         $template = trim((string) ($authority->mail_template ?? ''));
