@@ -14,6 +14,7 @@ class Authority extends Model
         'from_email',
         'main_email',
         'to_email',
+        'email_pattern',
         'mail_template',
     ];
 }

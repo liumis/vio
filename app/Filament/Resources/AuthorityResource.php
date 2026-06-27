@@ -41,6 +41,9 @@ class AuthorityResource extends Resource
                 ->required()
                 ->label('To email')
                 ->maxLength(255),
+            Forms\Components\TextInput::make('email_pattern')
+                ->label('Email pattern')
+                ->maxLength(255),
             Forms\Components\Textarea::make('mail_template')
                 ->required()
                 ->label('Mail template')
@@ -66,6 +69,10 @@ class AuthorityResource extends Resource
                     ->sortable(),
                 Tables\Columns\TextColumn::make('to_email')
                     ->label('To email')
+                    ->searchable()
+                    ->sortable(),
+                Tables\Columns\TextColumn::make('email_pattern')
+                    ->label('Email pattern')
                     ->searchable()
                     ->sortable(),
                 Tables\Columns\TextColumn::make('mail_template')
