@@ -15,6 +15,9 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->web(append: [
             LogUserActivity::class,
         ]);
+        $middleware->validateCsrfTokens(except: [
+            'marksign/callback',
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //

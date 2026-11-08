@@ -1,6 +1,18 @@
 <?php
 
+use App\Http\Controllers\MarkSignCallbackController;
+use App\Http\Controllers\WheelsysSsoController;
 use Illuminate\Support\Facades\Route;
+
+Route::post('/marksign/callback', [MarkSignCallbackController::class, 'handle'])->name('marksign.callback');
+
+Route::middleware('auth')->group(function () {
+    Route::get('/wheelsys/open', [WheelsysSsoController::class, 'open'])->name('wheelsys.sso');
+    Route::get('/wheelsys/create-traffic-violation', [WheelsysSsoController::class, 'createTrafficViolation'])
+        ->name('wheelsys.create-traffic-violation');
+});
+
+
 
 Route::get('/preview/email/violation', function () {
     return view('emails.violation-notification', [

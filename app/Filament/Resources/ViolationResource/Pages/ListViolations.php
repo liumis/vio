@@ -2,7 +2,7 @@
 
 namespace App\Filament\Resources\ViolationResource\Pages;
 
-use App\Filament\Resources\ImportResource;
+use App\Filament\Pages\WheelsExcelExport;
 use App\Filament\Resources\ViolationResource;
 use Filament\Actions\Action;
 use Filament\Resources\Pages\ListRecords;
@@ -14,10 +14,10 @@ class ListViolations extends ListRecords
     protected function getHeaderActions(): array
     {
         return [
-            Action::make('import')
-                ->label('Import')
+            Action::make('wheelsysImport')
+                ->label('Wheelsys import')
                 ->icon('heroicon-o-arrow-up-tray')
-                ->url(ImportResource::getUrl('create')),
+                ->url(WheelsExcelExport::getUrl()),
         ];
     }
 }

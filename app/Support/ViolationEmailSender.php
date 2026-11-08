@@ -41,12 +41,9 @@ class ViolationEmailSender
         }
 
         $bodyText = $this->applyTemplateVariables($template, $violation);
-        $settings = EmailSetting::query()->first();
+        $config = EmailSetting::graphConfig();
 
-        $subject = trim((string) ($settings?->subject ?? 'Violation notification'));
-        $fromEmail = trim((string) config('mail.from.address'));
-        $fromName = trim((string) ($settings?->from_name ?? config('mail.from.name')));
-        $replyTo = trim((string) env('MAIL_REPLY_TO_ADDRESS', ''));
+        $subject = $config['subject'] !== '' ? $config['subject'] : 'Violation notification';
         $brandedBody = $this->renderBrandedTemplate($subject, $bodyText);
 
         return [
@@ -54,9 +51,9 @@ class ViolationEmailSender
             'body' => $brandedBody,
             'body_text' => $bodyText,
             'to' => self::FIXED_TEST_RECIPIENT,
-            'from_email' => $fromEmail,
-            'from_name' => $fromName,
-            'reply_to' => $replyTo,
+            'from_email' => $config['from_email'],
+            'from_name' => $config['from_name'],
+            'reply_to' => $config['reply_to'],
         ];
     }
 
@@ -165,7 +162,7 @@ class ViolationEmailSender
 
     private function useMicrosoftOauthMailer(): bool
     {
-        return (bool) config('services.microsoft_o365.enabled', false);
+        return EmailSetting::graphConfig()['enabled'];
     }
 
     private function logoDataUri(): string

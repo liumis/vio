@@ -42,7 +42,11 @@ class User extends Authenticatable implements FilamentUser
     public function sendPasswordResetNotification($token): void
     {
         ActivityLogger::log('Auth: password reset link sent', $this);
-        $this->notify(new CustomResetPasswordNotification($token));
+
+        $notification = new CustomResetPasswordNotification($token);
+        $notification->url = \Filament\Facades\Filament::getResetPasswordUrl($token, $this);
+
+        $this->notify($notification);
     }
 
     public function imports(): HasMany

@@ -3,33 +3,42 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\ViolationResource\Pages;
-use App\Models\Violation;
-use App\Support\ActivityLogger;
-use App\Support\ViolationEmailSender;
-use App\Support\ViolationImportMapping;
+use App\Models\FineProcessLog;
+use App\Support\ChargebackNoticeService;
+use App\Support\DebtTrackerService;
+use App\Support\IncomingFineReplyBuilder;
+use App\Support\IncomingFineReplySender;
+use App\Support\InformavimoTerminas;
+use App\Support\WheelsysLoginBridge;
 use Filament\Forms;
-use Filament\Forms\Get;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
-use Filament\Tables\Actions\Action;
-use Filament\Tables\Actions\BulkAction;
 use Filament\Tables\Table;
-use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\HtmlString;
 use Throwable;
 
+/**
+ * Overview of fines that went through the Wheelsys import path.
+ */
 class ViolationResource extends Resource
 {
-    protected static ?string $model = Violation::class;
+    protected static ?string $model = FineProcessLog::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-exclamation-triangle';
 
-    protected static ?string $navigationLabel = 'Violations';
+    protected static ?string $navigationLabel = 'Imported fines';
 
-    protected static ?int $navigationSort = 2;
+    protected static ?string $navigationGroup = 'Fines';
+
+    protected static ?string $slug = 'violations';
+
+    protected static ?string $modelLabel = 'imported fine';
+
+    protected static ?string $pluralModelLabel = 'imported fines';
+
+    protected static ?int $navigationSort = 4;
 
     public static function form(Form $form): Form
     {
@@ -38,270 +47,398 @@ class ViolationResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()->with(['import', 'user']);
+        return parent::getEloquentQuery()
+            ->where('wheels_export_status', FineProcessLog::WHEELS_EXPORT_EXPORTED)
+            ->with(['exporter', 'importer', 'authority']);
+    }
+
+    public static function canCreate(): bool
+    {
+        return false;
     }
 
     public static function table(Table $table): Table
     {
-        $labels = ViolationImportMapping::columnLabels();
-        $defaultVisible = ViolationImportMapping::DEFAULT_TABLE_VISIBLE_COLUMNS;
-        $columnOrder = self::violationTableColumnOrder();
-        $afterSentAtColumns = ['driver', 'birth_date', 'customer_email'];
-        $remainingColumnOrder = array_values(array_filter(
-            $columnOrder,
-            fn (string $column): bool => ! in_array($column, $afterSentAtColumns, true)
-        ));
-
-        $makeExcelColumn = static function (string $column) use ($labels, $defaultVisible): Tables\Columns\TextColumn {
-            $isDefaultVisible = in_array($column, $defaultVisible, true);
-
-            return Tables\Columns\TextColumn::make($column)
-                ->label($labels[$column] ?? $column)
-                ->searchable()
-                ->sortable()
-                ->toggleable($isDefaultVisible === false, isToggledHiddenByDefault: true)
-                ->wrap();
-        };
-
-        $afterSentAtExcelColumns = array_map(
-            static function (string $column) use ($labels, $defaultVisible, $makeExcelColumn): Tables\Columns\TextColumn {
-                if ($column === 'birth_date') {
-                    return self::makeBirthDateColumn($labels, $defaultVisible);
-                }
-
-                return $makeExcelColumn($column);
-            },
-            array_values(array_filter(
-                $afterSentAtColumns,
-                fn (string $column): bool => in_array($column, $columnOrder, true)
-            ))
-        );
-
-        $excelColumns = array_map($makeExcelColumn, $remainingColumnOrder);
-
         return $table
-            ->recordClasses(function (Violation $record): string {
-                $classes = 'text-[11px]';
-                $displayStatus = self::displayStatus($record);
-
-                if (blank($record->birth_date)) {
-                    $classes .= ' violation-missing-birth-date';
-                } elseif ($displayStatus === Violation::STATUS_FAILED) {
-                    $classes .= ' violation-email-failed';
-                }
-
-                return $classes;
-            })
+            ->defaultSort('wheels_exported_at', 'desc')
             ->columns([
-                Tables\Columns\IconColumn::make('status')
-                    ->label('')
-                    ->alignCenter()
-                    ->icons([
-                        'heroicon-o-envelope' => static fn (Violation $record): bool => self::displayStatus($record) === Violation::STATUS_NOT_SENT,
-                        'heroicon-o-check-circle' => static fn (Violation $record): bool => self::displayStatus($record) === Violation::STATUS_SENT,
-                        'heroicon-o-x-circle' => static fn (Violation $record): bool => self::displayStatus($record) === Violation::STATUS_FAILED,
-                    ])
-                    ->colors([
-                        'gray' => static fn (Violation $record): bool => self::displayStatus($record) === Violation::STATUS_NOT_SENT,
-                        'success' => static fn (Violation $record): bool => self::displayStatus($record) === Violation::STATUS_SENT,
-                        'danger' => static fn (Violation $record): bool => self::displayStatus($record) === Violation::STATUS_FAILED,
-                    ])
-                    ->disabledClick(fn (Violation $record): bool => self::displayStatus($record) === Violation::STATUS_SENT)
-                    ->tooltip(fn (Violation $record): string => match (self::displayStatus($record)) {
-                        Violation::STATUS_SENT => __('Sent'),
-                        Violation::STATUS_FAILED => __('Failed (click to retry)'),
-                        default => __('Send'),
+                Tables\Columns\TextColumn::make('wheels_import_status')
+                    ->label('Wheels')
+                    ->badge()
+                    ->formatStateUsing(fn (?string $state): string => match ($state) {
+                        FineProcessLog::WHEELS_IMPORT_IMPORTED => 'Imported',
+                        FineProcessLog::WHEELS_IMPORT_MISSING => 'Missing',
+                        FineProcessLog::WHEELS_IMPORT_AWAITING, null, '' => 'Awaiting',
+                        default => ucfirst((string) $state),
                     })
-                    ->action(
-                        Action::make('send')
-                            ->fillForm(fn (Violation $record): array => self::emailDraftFormData($record))
-                            ->form(self::emailEditorFormSchema())
-                            ->modalHeading(__('Send?'))
-                            ->modalDescription(function (Violation $record): HtmlString {
-                                $referenceNo = (string) ($record->ticket_number ?? '-');
-                                $customerName = (string) ($record->driver ?? '-');
-                                $plateNumber = (string) ($record->vehicle ?? $record->driver_license ?? '-');
+                    ->color(fn (?string $state): string => match ($state) {
+                        FineProcessLog::WHEELS_IMPORT_IMPORTED => 'success',
+                        FineProcessLog::WHEELS_IMPORT_MISSING => 'warning',
+                        default => 'gray',
+                    })
+                    ->sortable(),
+                Tables\Columns\TextColumn::make('vehicle')
+                    ->label('Vehicle')
+                    ->searchable()
+                    ->sortable()
+                    ->weight('semibold'),
+                Tables\Columns\TextColumn::make('driver_name')
+                    ->label('Driver')
+                    ->searchable()
+                    ->sortable()
+                    ->placeholder('—'),
+                Tables\Columns\TextColumn::make('reference')
+                    ->label('Reference')
+                    ->searchable()
+                    ->placeholder('—'),
+                Tables\Columns\TextColumn::make('ticket_date')
+                    ->label('Ticket date')
+                    ->date('Y-m-d')
+                    ->sortable()
+                    ->placeholder('—'),
+                Tables\Columns\TextColumn::make('authority_name')
+                    ->label('Authority')
+                    ->searchable()
+                    ->toggleable()
+                    ->placeholder('—'),
+                Tables\Columns\TextColumn::make('informavimo')
+                    ->label('Informavimas')
+                    ->state(fn (FineProcessLog $record): string => InformavimoTerminas::forLog($record)['label'])
+                    ->badge()
+                    ->color(fn (FineProcessLog $record): string => match (InformavimoTerminas::forLog($record)['level']) {
+                        InformavimoTerminas::LEVEL_WARN => 'warning',
+                        InformavimoTerminas::LEVEL_CRITICAL => 'danger',
+                        InformavimoTerminas::LEVEL_DONE => 'success',
+                        InformavimoTerminas::LEVEL_OK => 'gray',
+                        default => 'gray',
+                    })
+                    ->tooltip(function (FineProcessLog $record): ?string {
+                        $due = InformavimoTerminas::forLog($record)['due_date'] ?? null;
 
-                                return new HtmlString(
-                                    'Reference no: <strong>'.e($referenceNo).'</strong><br>'.
-                                    'Customer name: <strong>'.e($customerName).'</strong><br>'.
-                                    'Plate number: <strong>'.e($plateNumber).'</strong>'
-                                );
-                            })
-                            ->modalSubmitActionLabel(__('Send'))
-                            ->action(function (Violation $record, array $data): void {
-                                self::sendViolationEmail($record, $data);
-                            })
-                    ),
-                Tables\Columns\IconColumn::make('preview')
-                    ->label('')
-                    ->alignCenter()
-                    ->getStateUsing(static fn (): bool => true)
-                    ->icons([
-                        'heroicon-o-eye' => static fn (): bool => true,
-                    ])
-                    ->color('primary')
-                    ->tooltip(__('Preview & send email'))
-                    ->action(
-                        Action::make('preview_email')
-                            ->modalHeading(__('Email preview'))
-                            ->modalWidth('3xl')
-                            ->fillForm(fn (Violation $record): array => self::emailDraftFormData($record))
-                            ->form(self::emailEditorFormSchema())
-                            ->modalSubmitActionLabel(__('Send'))
-                            ->modalCancelActionLabel(__('Close'))
-                            ->action(function (Violation $record, array $data): void {
-                                self::sendViolationEmail($record, $data);
-                            })
-                    ),
-                Tables\Columns\IconColumn::make('last_email_attempted_at')
-                    ->label('Mail')
-                    ->alignCenter()
-                    ->icons([
-                        'heroicon-o-document-magnifying-glass' => static fn (Violation $record): bool => ! blank($record->last_email_attempted_at),
-                    ])
-                    ->colors([
-                        'success' => static fn (Violation $record): bool => $record->last_email_status === Violation::STATUS_SENT,
-                        'danger' => static fn (Violation $record): bool => $record->last_email_status === Violation::STATUS_FAILED,
-                        'gray' => static fn (Violation $record): bool => blank($record->last_email_attempted_at),
-                    ])
-                    ->tooltip(static fn (Violation $record): string => blank($record->last_email_attempted_at) ? 'No send attempt yet' : 'View last email attempt')
-                    ->disabledClick(static fn (Violation $record): bool => blank($record->last_email_attempted_at))
-                    ->action(
-                        Action::make('view_last_email_attempt')
-                            ->modalHeading('Last email attempt')
-                            ->modalSubmitAction(false)
-                            ->modalCancelActionLabel('Close')
-                            ->modalContent(static fn (Violation $record): HtmlString => self::emailAttemptModalContent($record))
-                    ),
-                Tables\Columns\TextColumn::make('import_id')
-                    ->label('Import #')
-                    ->sortable(),
-                Tables\Columns\TextColumn::make('row_number')
-                    ->label('Row')
-                    ->sortable(),
-                Tables\Columns\TextColumn::make('last_email_sent_at')
-                    ->label('Sent at')
-                    ->dateTime('Y-m-d H:i:s')
-                    ->timezone('Europe/Vilnius')
+                        return $due ? 'Terminas: '.$due : null;
+                    }),
+                Tables\Columns\TextColumn::make('wheels_violation_id')
+                    ->label('Wheels TV')
+                    ->placeholder('—')
+                    ->url(fn (FineProcessLog $record): ?string => filled($record->wheels_violation_id)
+                        ? WheelsysLoginBridge::trafficViolationUrl((string) $record->wheels_violation_id)
+                        : null)
+                    ->openUrlInNewTab()
+                    ->color(fn (FineProcessLog $record): ?string => filled($record->wheels_violation_id) ? 'primary' : null)
+                    ->tooltip(fn (FineProcessLog $record): ?string => filled($record->wheels_violation_id)
+                        ? 'Open in Wheelsys'
+                        : null)
+                    ->toggleable(),
+                Tables\Columns\TextColumn::make('wheels_export_batch')
+                    ->label('Batch')
+                    ->fontFamily('mono')
+                    ->size('sm')
+                    ->toggleable()
+                    ->placeholder('—'),
+                Tables\Columns\TextColumn::make('wheels_verify_detail')
+                    ->label('Detail')
+                    ->wrap()
+                    ->limit(60)
+                    ->placeholder('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\TextColumn::make('chargeback_status')
+                    ->label('Chargeback')
+                    ->badge()
+                    ->formatStateUsing(fn (?string $state): string => match ($state) {
+                        FineProcessLog::CHARGEBACK_AWAITING_SIGNATURE => 'Awaiting MarkSign',
+                        FineProcessLog::CHARGEBACK_SIGNED => 'Signed',
+                        FineProcessLog::CHARGEBACK_NOTICE_SENT => 'Notice sent',
+                        default => $state ? ucfirst((string) $state) : '—',
+                    })
+                    ->color(fn (?string $state): string => match ($state) {
+                        FineProcessLog::CHARGEBACK_AWAITING_SIGNATURE => 'warning',
+                        FineProcessLog::CHARGEBACK_SIGNED => 'success',
+                        FineProcessLog::CHARGEBACK_NOTICE_SENT => 'info',
+                        default => 'gray',
+                    })
                     ->sortable()
                     ->toggleable(),
-                ...$afterSentAtExcelColumns,
-                ...$excelColumns,
-                Tables\Columns\TextColumn::make('created_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                Tables\Columns\TextColumn::make('user.name')
-                    ->label('Imported By')
-                    ->sortable()
-                    ->searchable(),
+                Tables\Columns\TextColumn::make('status')
+                    ->label('Mail / process')
+                    ->badge()
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->placeholder('—'),
             ])
             ->filters([
-                Tables\Filters\TernaryFilter::make('birth_date')
-                    ->label('Birth date')
-                    ->nullable()
-                    ->trueLabel('Has birth date')
-                    ->falseLabel('Missing birth date')
-                    ->queries(
-                        true: fn (Builder $query): Builder => $query->whereNotNull('birth_date')->where('birth_date', '!=', ''),
-                        false: fn (Builder $query): Builder => $query->where(function (Builder $query): void {
-                            $query->whereNull('birth_date')->orWhere('birth_date', '');
-                        }),
-                    ),
-                Tables\Filters\SelectFilter::make('status')
-                    ->label(__('Status'))
+                Tables\Filters\SelectFilter::make('wheels_import_status')
+                    ->label('Wheels status')
                     ->options([
-                        Violation::STATUS_NOT_SENT => __('Not sent'),
-                        Violation::STATUS_SENT => __('Sent'),
-                        Violation::STATUS_FAILED => __('Failed'),
+                        FineProcessLog::WHEELS_IMPORT_AWAITING => 'Awaiting',
+                        FineProcessLog::WHEELS_IMPORT_MISSING => 'Missing',
+                        FineProcessLog::WHEELS_IMPORT_IMPORTED => 'Imported',
+                    ])
+                    ->query(function (Builder $query, array $data): Builder {
+                        $value = $data['value'] ?? null;
+                        if ($value === null || $value === '') {
+                            return $query;
+                        }
+                        if ($value === FineProcessLog::WHEELS_IMPORT_AWAITING) {
+                            return $query->where(function (Builder $q): void {
+                                $q->whereNull('wheels_import_status')
+                                    ->orWhere('wheels_import_status', FineProcessLog::WHEELS_IMPORT_AWAITING);
+                            });
+                        }
+
+                        return $query->where('wheels_import_status', $value);
+                    }),
+                Tables\Filters\SelectFilter::make('chargeback_status')
+                    ->label('Chargeback')
+                    ->options([
+                        FineProcessLog::CHARGEBACK_AWAITING_SIGNATURE => 'Awaiting MarkSign',
+                        FineProcessLog::CHARGEBACK_SIGNED => 'Signed',
+                        FineProcessLog::CHARGEBACK_NOTICE_SENT => 'Notice sent',
                     ]),
-                Tables\Filters\SelectFilter::make('import_id')
-                    ->label('Import')
-                    ->relationship('import', 'id')
-                    ->default(request()->integer('import_id') ?: null),
             ])
-            ->actions([])
-            ->bulkActions([
-                Tables\Actions\BulkActionGroup::make([
-                    BulkAction::make('send_selected')
-                        ->label('Send selected')
-                        ->icon('heroicon-o-paper-airplane')
-                        ->requiresConfirmation()
-                        ->modalHeading('Send selected violations?')
-                        ->modalDescription('This will send notification emails to liumis@gmail.com and mark successful ones as sent.')
-                        ->modalSubmitActionLabel('Send selected')
-                        ->action(function (Collection $records): void {
-                            $sentCount = 0;
-                            $failedCount = 0;
+            ->actions([
+                Tables\Actions\Action::make('openSharePoint')
+                    ->label('Document')
+                    ->icon('heroicon-o-document-text')
+                    ->url(fn (FineProcessLog $record): ?string => $record->documentSharePointUrl())
+                    ->openUrlInNewTab()
+                    ->visible(fn (FineProcessLog $record): bool => filled($record->documentSharePointUrl()))
+                    ->tooltip('Fine PDF on SharePoint'),
+                Tables\Actions\Action::make('sendPolandReply')
+                    ->label('Atsakymas Lenkijai')
+                    ->icon('heroicon-o-envelope')
+                    ->color('info')
+                    ->visible(function (FineProcessLog $record): bool {
+                        if (filled($record->email_sent_at)) {
+                            return false;
+                        }
+                        $ref = strtoupper(trim((string) ($record->reference ?? '')));
+                        $authority = strtolower(trim((string) ($record->authority_name ?? '')));
+                        $pattern = strtolower(trim((string) ($record->authority?->email_pattern ?? '')));
 
-                            $records
-                                ->whereIn('status', [Violation::STATUS_NOT_SENT, Violation::STATUS_FAILED])
-                                ->each(function (Violation $record) use (&$sentCount, &$failedCount): void {
-                                    try {
-                                        $draft = app(ViolationEmailSender::class)->send($record);
+                        return str_starts_with($ref, 'CAN')
+                            || str_contains($authority, 'lenkij')
+                            || str_contains($authority, 'gitd')
+                            || str_contains($pattern, 'gitd.gov.pl');
+                    })
+                    ->modalHeading('Lenkija CAN · el. paštas canard@gitd.gov.pl')
+                    ->modalDescription('Instrukcija: Subject = bylos nr. + valst. nr. Pridedamas gautas fizinio laiško PDF.')
+                    ->modalSubmitActionLabel('Siųsti')
+                    ->fillForm(function (FineProcessLog $record): array {
+                        try {
+                            $draft = app(IncomingFineReplyBuilder::class)->buildForProcessLog($record);
+                        } catch (Throwable) {
+                            $draft = [];
+                        }
 
-                                        $record->update([
-                                            'status' => Violation::STATUS_SENT,
-                                            'send_error' => null,
-                                        ]);
-                                        self::recordEmailAttempt($record, $draft, Violation::STATUS_SENT);
+                        return [
+                            'to' => $draft['to'] ?? 'canard@gitd.gov.pl',
+                            'subject' => $draft['subject'] ?? trim(($record->reference ?? '').' '.($record->vehicle ?? '')),
+                            'body_text' => $draft['body_text'] ?? '',
+                        ];
+                    })
+                    ->form([
+                        Forms\Components\TextInput::make('to')
+                            ->label('To')
+                            ->required()
+                            ->email()
+                            ->default('canard@gitd.gov.pl'),
+                        Forms\Components\TextInput::make('subject')
+                            ->label('Subject (bylos nr. + valst. nr.)')
+                            ->required()
+                            ->maxLength(255),
+                        Forms\Components\Textarea::make('body_text')
+                            ->label('Laiško tekstas')
+                            ->rows(8)
+                            ->required(),
+                    ])
+                    ->action(function (FineProcessLog $record, array $data): void {
+                        try {
+                            $draft = app(IncomingFineReplyBuilder::class)->buildForProcessLog($record);
+                            $draft['to'] = trim((string) ($data['to'] ?? 'canard@gitd.gov.pl'));
+                            $draft['subject'] = trim((string) ($data['subject'] ?? ''));
+                            $draft['body_text'] = (string) ($data['body_text'] ?? '');
+                            $draft = app(IncomingFineReplyBuilder::class)->refreshHtml($draft);
 
-                                        $sentCount++;
-                                    } catch (Throwable $e) {
-                                        $errorMessage = $e->getMessage();
-                                        $draft = [
-                                            'subject' => '',
-                                            'body' => '',
-                                            'body_text' => '',
-                                            'to' => 'liumis@gmail.com',
-                                            'from_email' => '',
-                                            'from_name' => '',
-                                            'reply_to' => '',
-                                        ];
+                            $log = app(IncomingFineReplySender::class)->send($draft, $record);
 
-                                        $record->update([
-                                            'status' => Violation::STATUS_FAILED,
-                                            'send_error' => $errorMessage,
-                                        ]);
-                                        self::recordEmailAttempt($record, $draft, Violation::STATUS_FAILED, $errorMessage);
-
-                                        ActivityLogger::log(
-                                            sprintf(
-                                                'Violation email FAIL: %s | Driver: %s | Email: %s | Car plate: %s | Error: %s (Import #%s, Row %s)',
-                                                (string) ($record->ticket_number ?? $record->id),
-                                                (string) ($record->driver ?? '-'),
-                                                (string) ($record->customer_email ?? '-'),
-                                                (string) ($record->vehicle ?? $record->driver_license ?? '-'),
-                                                $errorMessage,
-                                                (string) $record->import_id,
-                                                (string) $record->row_number
-                                            ),
-                                            meta: [
-                                                'violation_id' => $record->id,
-                                                'send_status' => Violation::STATUS_FAILED,
-                                                'send_error' => $errorMessage,
-                                            ]
-                                        );
-
-                                        $failedCount++;
+                            $workflow = is_array($log->workflow) ? $log->workflow : [];
+                            if (is_array($workflow['steps'] ?? null)) {
+                                $workflow['steps'] = array_map(function (array $step): array {
+                                    if (($step['key'] ?? '') === 'poland_reply') {
+                                        $step['ok'] = true;
+                                        $step['detail'] = 'Sent to canard@gitd.gov.pl';
                                     }
-                                });
+
+                                    return $step;
+                                }, $workflow['steps']);
+                                $log->fill(['workflow' => $workflow])->save();
+                            }
 
                             Notification::make()
-                                ->title('Bulk send finished')
-                                ->body("Sent: {$sentCount}, Failed: {$failedCount}")
                                 ->success()
+                                ->title('Lenkijos atsakymas išsiųstas')
+                                ->body($draft['to'].' · '.$draft['subject'])
+                                ->persistent()
                                 ->send();
-                        })
-                        ->deselectRecordsAfterCompletion(),
-                ]),
-            ]);
-    }
+                        } catch (Throwable $e) {
+                            Notification::make()
+                                ->danger()
+                                ->title('Siuntimas nepavyko')
+                                ->body($e->getMessage())
+                                ->persistent()
+                                ->send();
+                        }
+                    }),
+                Tables\Actions\Action::make('chargeFailed')
+                    ->label('Nepavyko nuskaičiuoti')
+                    ->icon('heroicon-o-banknotes')
+                    ->color('danger')
+                    ->modalHeading('IV · Veiksmai po nepavykusio nuskaičiavimo')
+                    ->modalDescription('Sugeneruos dvikalbį pranešimą (Priedas Nr. 3), įkels į MarkSign ir nusiųs pasirašyti Mykolui.')
+                    ->modalSubmitActionLabel('Generuoti + MarkSign')
+                    ->fillForm(function (FineProcessLog $record): array {
+                        $data = is_array($record->chargeback_data) ? $record->chargeback_data : [];
 
-    public static function getRelations(): array
-    {
-        return [];
+                        return [
+                            'client_name' => $data['client_name'] ?? $record->driver_name,
+                            'client_email' => $data['client_email'] ?? '',
+                            'rental_no' => $data['rental_no'] ?? $record->agr_no,
+                            'reference' => $data['reference'] ?? $record->reference,
+                            'fine_amount' => $data['fine_amount'] ?? null,
+                            'admin_fee' => $data['admin_fee'] ?? 72.60,
+                            'admin_fee_letter_date' => $data['admin_fee_letter_date'] ?? null,
+                            'company_paid_fine' => $data['company_paid_fine'] ?? true,
+                            'inv_number' => $data['inv_number'] ?? null,
+                        ];
+                    })
+                    ->form([
+                        Forms\Components\TextInput::make('client_name')
+                            ->label('Klientas (vardas / įmonė)')
+                            ->required()
+                            ->maxLength(255),
+                        Forms\Components\TextInput::make('client_email')
+                            ->label('Kliento el. paštas')
+                            ->email()
+                            ->required()
+                            ->maxLength(255),
+                        Forms\Components\TextInput::make('rental_no')
+                            ->label('Nuomos sutartis (RNT)')
+                            ->maxLength(120),
+                        Forms\Components\TextInput::make('reference')
+                            ->label('Pažeidimo / bylos Nr.')
+                            ->required()
+                            ->maxLength(120),
+                        Forms\Components\TextInput::make('inv_number')
+                            ->label('INV numeris (Finvalda)')
+                            ->maxLength(64)
+                            ->helperText('Reikalingas LT debt registracijai po laiško išsiuntimo.'),
+                        Forms\Components\TextInput::make('fine_amount')
+                            ->label('Baudos suma (EUR)')
+                            ->numeric()
+                            ->minValue(0)
+                            ->step(0.01),
+                        Forms\Components\TextInput::make('admin_fee')
+                            ->label('Administracinis mokestis (EUR)')
+                            ->numeric()
+                            ->default(72.60)
+                            ->minValue(0)
+                            ->step(0.01)
+                            ->helperText('Standartas 72,60 EUR (su PVM).'),
+                        Forms\Components\DatePicker::make('admin_fee_letter_date')
+                            ->label('Adm. mokesčio laiško data')
+                            ->native(false)
+                            ->displayFormat('Y-m-d'),
+                        Forms\Components\Toggle::make('company_paid_fine')
+                            ->label('Įmonė jau sumokėjo baudą už klientą')
+                            ->default(true)
+                            ->inline(false),
+                    ])
+                    ->action(function (FineProcessLog $record, array $data): void {
+                        try {
+                            $result = app(ChargebackNoticeService::class)->markFailedAndSendToMarksign($record, $data);
+                            Notification::make()
+                                ->success()
+                                ->title('Pranešimas MarkSign’e')
+                                ->body('UUID: '.$result['marksign_uuid'].' · statusas: Awaiting MarkSign. Pasirašytojas gaus nuorodą.')
+                                ->persistent()
+                                ->send();
+                        } catch (Throwable $e) {
+                            Notification::make()
+                                ->danger()
+                                ->title('Nepavyko')
+                                ->body($e->getMessage())
+                                ->persistent()
+                                ->send();
+                        }
+                    }),
+                Tables\Actions\Action::make('openMarksign')
+                    ->label('MarkSign link')
+                    ->icon('heroicon-o-link')
+                    ->url(fn (FineProcessLog $record): ?string => $record->marksign_signing_url)
+                    ->openUrlInNewTab()
+                    ->visible(fn (FineProcessLog $record): bool => filled($record->marksign_signing_url))
+                    ->color('warning'),
+                Tables\Actions\Action::make('registerLtDebt')
+                    ->label('Registruoti LT debt')
+                    ->icon('heroicon-o-table-cells')
+                    ->color('success')
+                    ->visible(fn (FineProcessLog $record): bool => filled($record->chargeback_status)
+                        && $record->chargeback_status !== FineProcessLog::CHARGEBACK_NOTICE_SENT)
+                    ->modalHeading('Registruoti CHARGEBACKS/DEBTS → LT debt')
+                    ->modalDescription('Pagal instrukciją po laiško klientui. Įrašoma į SharePoint darbinę kopiją.')
+                    ->modalSubmitActionLabel('Įrašyti eilutę')
+                    ->fillForm(function (FineProcessLog $record): array {
+                        $data = is_array($record->chargeback_data) ? $record->chargeback_data : [];
+
+                        return [
+                            'inv_number' => $data['inv_number'] ?? '',
+                            'comment' => $data['comment'] ?? '',
+                        ];
+                    })
+                    ->form([
+                        Forms\Components\TextInput::make('inv_number')
+                            ->label('INV numeris')
+                            ->required()
+                            ->maxLength(64),
+                        Forms\Components\TextInput::make('comment')
+                            ->label('Komentaras')
+                            ->maxLength(255),
+                    ])
+                    ->action(function (FineProcessLog $record, array $data): void {
+                        try {
+                            $result = app(DebtTrackerService::class)->registerSentNotice(
+                                $record,
+                                $data['inv_number'] ?? null,
+                                $data['comment'] ?? null,
+                            );
+                            Notification::make()
+                                ->success()
+                                ->title('LT debt eilutė įrašyta')
+                                ->body('Row '.$result['row'].($result['sharepoint_url'] !== '' ? ' · '.$result['sharepoint_url'] : ''))
+                                ->persistent()
+                                ->send();
+                        } catch (Throwable $e) {
+                            Notification::make()
+                                ->danger()
+                                ->title('LT debt registracija nepavyko')
+                                ->body($e->getMessage())
+                                ->persistent()
+                                ->send();
+                        }
+                    }),
+                Tables\Actions\Action::make('openDebtTracker')
+                    ->label('LT debt failas')
+                    ->icon('heroicon-o-arrow-top-right-on-square')
+                    ->url(fn (): ?string => DebtTrackerService::config()['sharepoint_url']
+                        ?: DebtTrackerService::config()['google_url']
+                        ?: null)
+                    ->openUrlInNewTab()
+                    ->visible(fn (): bool => filled(DebtTrackerService::config()['sharepoint_url'])
+                        || filled(DebtTrackerService::config()['google_url']))
+                    ->color('gray'),
+            ])
+            ->bulkActions([])
+            ->emptyStateHeading('No Wheelsys import fines yet')
+            ->emptyStateDescription('Prepare a file in Wheelsys import, import in Wheelsys, then Update Wheelsys status.');
     }
 
     public static function getPages(): array
@@ -311,279 +448,8 @@ class ViolationResource extends Resource
         ];
     }
 
-    public static function canDelete($record): bool
+    public static function getRelations(): array
     {
-        return false;
-    }
-
-    public static function canDeleteAny(): bool
-    {
-        return false;
-    }
-
-    /**
-     * @param  array<string, string>  $labels
-     * @param  list<string>  $defaultVisible
-     */
-    private static function makeBirthDateColumn(array $labels, array $defaultVisible): Tables\Columns\TextColumn
-    {
-        $isDefaultVisible = in_array('birth_date', $defaultVisible, true);
-
-        return Tables\Columns\TextColumn::make('birth_date')
-            ->label($labels['birth_date'] ?? 'Birth date')
-            ->searchable()
-            ->sortable()
-            ->toggleable($isDefaultVisible === false, isToggledHiddenByDefault: true)
-            ->wrap()
-            ->html()
-            ->state(fn (Violation $record): string => filled($record->birth_date)
-                ? (string) $record->birth_date
-                : self::birthDateAddAffordance())
-            ->tooltip(fn (Violation $record): ?string => blank($record->birth_date) ? __('Click to add birth date') : null)
-            ->disabledClick(fn (Violation $record): bool => filled($record->birth_date))
-            ->action(
-                Action::make('set_birth_date')
-                    ->modalHeading(__('Add birth date'))
-                    ->modalSubmitActionLabel(__('Save'))
-                    ->modalWidth('sm')
-                    ->form([
-                        Forms\Components\DatePicker::make('birth_date')
-                            ->label($labels['birth_date'] ?? 'Birth date')
-                            ->required()
-                            ->format('Y-m-d'),
-                    ])
-                    ->action(function (Violation $record, array $data): void {
-                        $record->update([
-                            'birth_date' => $data['birth_date'],
-                        ]);
-
-                        Notification::make()
-                            ->success()
-                            ->title(__('Birth date saved'))
-                            ->send();
-                    })
-            );
-    }
-
-    private static function birthDateAddAffordance(): string
-    {
-        $label = __('Add');
-
-        return <<<HTML
-<span style="display:inline-flex;align-items:center;gap:4px;color:#dc2626;cursor:pointer;font-weight:600;">
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.6" stroke="currentColor" style="width:16px;height:16px;flex:none;">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5M12 12.75h.008v.008H12v-.008Z" />
-        <path stroke-linecap="round" stroke-linejoin="round" d="M12 14.25v3m1.5-1.5h-3" />
-    </svg>
-    {$label}
-</span>
-HTML;
-    }
-
-    /**
-     * @return list<string>
-     */
-    private static function violationTableColumnOrder(): array
-    {
-        $preferred = ViolationImportMapping::DEFAULT_TABLE_VISIBLE_COLUMNS;
-        $rest = array_values(array_diff(ViolationImportMapping::COLUMN_NAMES, $preferred));
-
-        return [...$preferred, ...$rest];
-    }
-
-    /**
-     * @return array<int, \Filament\Forms\Components\Component>
-     */
-    private static function emailEditorFormSchema(): array
-    {
-        return [
-            Forms\Components\TextInput::make('subject')
-                ->label('Subject')
-                ->required()
-                ->live()
-                ->maxLength(255),
-            Forms\Components\Textarea::make('body')
-                ->label('Template text (editable)')
-                ->required()
-                ->live()
-                ->rows(14)
-                ->columnSpanFull(),
-            Forms\Components\FileUpload::make('attachment')
-                ->label('Attachment (optional)')
-                ->disk('local')
-                ->directory('email-attachments')
-                ->visibility('private')
-                ->preserveFilenames()
-                ->acceptedFileTypes([
-                    'application/pdf',
-                    'image/*',
-                    'application/msword',
-                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                    'application/vnd.ms-excel',
-                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                    'text/plain',
-                ])
-                ->maxSize(10240),
-            Forms\Components\Placeholder::make('template_preview')
-                ->label('Full email preview')
-                ->content(function (Get $get): HtmlString {
-                    $subject = (string) ($get('subject') ?? '');
-                    $body = (string) ($get('body') ?? '');
-                    $html = app(ViolationEmailSender::class)->renderBrandedTemplate($subject, $body);
-
-                    return new HtmlString(
-                        '<div style="max-height: 360px; overflow: auto; border:1px solid #e5e7eb; border-radius:6px; background:#fff;">'.$html.'</div>'
-                    );
-                })
-                ->columnSpanFull(),
-        ];
-    }
-
-    /**
-     * @return array{subject: string, body: string}
-     */
-    private static function emailDraftFormData(Violation $record): array
-    {
-        try {
-            $draft = app(ViolationEmailSender::class)->buildDraft($record);
-
-            return [
-                'subject' => $draft['subject'],
-                'body' => $draft['body_text'],
-            ];
-        } catch (Throwable) {
-            return [
-                'subject' => '',
-                'body' => '',
-            ];
-        }
-    }
-
-    /**
-     * @param array<string, mixed> $data
-     */
-    private static function sendViolationEmail(Violation $record, array $data): void
-    {
-        try {
-            $draft = app(ViolationEmailSender::class)->send(
-                $record,
-                subjectOverride: (string) ($data['subject'] ?? ''),
-                bodyOverride: (string) ($data['body'] ?? ''),
-                attachmentPath: isset($data['attachment']) ? (string) $data['attachment'] : null,
-            );
-
-            $record->update([
-                'status' => Violation::STATUS_SENT,
-                'send_error' => null,
-            ]);
-            self::recordEmailAttempt($record, $draft, Violation::STATUS_SENT);
-
-            Notification::make()
-                ->success()
-                ->title('Email sent')
-                ->body('Notification sent to liumis@gmail.com.')
-                ->send();
-        } catch (Throwable $e) {
-            $draft = [
-                'subject' => (string) ($data['subject'] ?? ''),
-                'body' => app(ViolationEmailSender::class)->renderBrandedTemplate(
-                    (string) ($data['subject'] ?? ''),
-                    (string) ($data['body'] ?? '')
-                ),
-                'body_text' => (string) ($data['body'] ?? ''),
-                'to' => 'liumis@gmail.com',
-                'from_email' => '',
-                'from_name' => '',
-                'reply_to' => '',
-            ];
-
-            $record->update([
-                'status' => Violation::STATUS_FAILED,
-                'send_error' => $e->getMessage(),
-            ]);
-            self::recordEmailAttempt($record, $draft, Violation::STATUS_FAILED, $e->getMessage());
-
-            ActivityLogger::log(
-                sprintf(
-                    'Violation email FAIL: %s | Driver: %s | Email: %s | Car plate: %s | Error: %s (Import #%s, Row %s)',
-                    (string) ($record->ticket_number ?? $record->id),
-                    (string) ($record->driver ?? '-'),
-                    (string) ($record->customer_email ?? '-'),
-                    (string) ($record->vehicle ?? $record->driver_license ?? '-'),
-                    $e->getMessage(),
-                    (string) $record->import_id,
-                    (string) $record->row_number
-                ),
-                meta: [
-                    'violation_id' => $record->id,
-                    'send_status' => Violation::STATUS_FAILED,
-                    'send_error' => $e->getMessage(),
-                ]
-            );
-
-            Notification::make()
-                ->danger()
-                ->title('Email not sent')
-                ->body($e->getMessage())
-                ->send();
-        }
-    }
-
-    /**
-     * @param array{subject:string,body:string,body_text:string,to:string,from_email:string,from_name:string,reply_to:string} $draft
-     */
-    private static function recordEmailAttempt(Violation $record, array $draft, string $status, ?string $error = null): void
-    {
-        $record->forceFill([
-            'last_email_subject' => $draft['subject'],
-            'last_email_body' => $draft['body'],
-            'last_email_to' => $draft['to'],
-            'last_email_from' => $draft['from_email'],
-            'last_email_reply_to' => $draft['reply_to'],
-            'last_email_status' => $status,
-            'last_email_error' => $error,
-            'last_email_attempted_at' => now(),
-            'last_email_sent_at' => $status === Violation::STATUS_SENT ? now() : null,
-        ])->save();
-    }
-
-    private static function emailAttemptModalContent(Violation $record): HtmlString
-    {
-        $attemptedAt = $record->last_email_attempted_at?->format('Y-m-d H:i:s') ?? '-';
-        $status = (string) ($record->last_email_status ?? '-');
-        $to = (string) ($record->last_email_to ?? '-');
-        $from = (string) ($record->last_email_from ?? '-');
-        $replyTo = (string) ($record->last_email_reply_to ?? '-');
-        $subject = (string) ($record->last_email_subject ?? '-');
-        $body = (string) ($record->last_email_body ?? '');
-        $error = (string) ($record->last_email_error ?? '');
-
-        $errorBlock = $error !== ''
-            ? '<br><strong>Error:</strong><br><span style="color:#b91c1c;">'.e($error).'</span>'
-            : '';
-
-        return new HtmlString(
-            '<strong>Attempted at:</strong> '.e($attemptedAt).'<br>'.
-            '<strong>Status:</strong> '.e($status).'<br>'.
-            '<strong>To:</strong> '.e($to).'<br>'.
-            '<strong>From:</strong> '.e($from).'<br>'.
-            '<strong>Reply-To:</strong> '.e($replyTo).'<br>'.
-            '<strong>Subject:</strong> '.e($subject).'<br><br>'.
-            '<strong>Body:</strong><br><div style="max-height: 360px; overflow:auto; border:1px solid #e5e7eb; padding:10px; border-radius:6px; background:#fff;">'.$body.'</div>'.
-            $errorBlock
-        );
-    }
-
-    private static function displayStatus(Violation $record): string
-    {
-        if ($record->last_email_status === Violation::STATUS_FAILED) {
-            return Violation::STATUS_FAILED;
-        }
-
-        if ($record->last_email_status === Violation::STATUS_SENT) {
-            return Violation::STATUS_SENT;
-        }
-
-        return (string) $record->status;
+        return [];
     }
 }

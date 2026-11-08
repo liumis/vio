@@ -20,7 +20,9 @@ class ActivityLogResource extends Resource
 
     protected static ?string $navigationLabel = 'Logs';
 
-    protected static ?int $navigationSort = 30;
+    protected static ?string $navigationGroup = 'Settings';
+
+    protected static ?int $navigationSort = 4;
 
     public static function table(Table $table): Table
     {
@@ -91,6 +93,7 @@ class ActivityLogResource extends Resource
                         'email_success' => 'Email success',
                         'email_fail' => 'Email failed',
                         'login_fail' => 'Login failed',
+                        'manual_search' => 'Manual search (GDPR access)',
                     ])
                     ->query(function (Builder $query, array $data): Builder {
                         $value = $data['value'] ?? null;
@@ -99,6 +102,7 @@ class ActivityLogResource extends Resource
                             'email_success' => $query->where('action', 'like', 'Violation email SUCCESS:%'),
                             'email_fail' => $query->where('action', 'like', 'Violation email FAIL:%'),
                             'login_fail' => $query->where('action', 'like', 'Auth: failed login%'),
+                            'manual_search' => $query->where('action', 'like', 'Manual search:%'),
                             default => $query,
                         };
                     }),

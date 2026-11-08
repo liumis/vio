@@ -3,9 +3,12 @@
 namespace App\Providers;
 
 use App\Models\Authority;
+use App\Models\EmailSetting;
 use App\Models\Import;
 use App\Models\User;
+use App\Notifications\CustomResetPasswordNotification;
 use App\Support\ActivityLogger;
+use Filament\Notifications\Auth\ResetPassword as FilamentResetPassword;
 use Filament\Tables\Table;
 use Illuminate\Auth\Events\Failed;
 use Illuminate\Auth\Events\PasswordReset;
@@ -17,7 +20,8 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        //
+        // Filament password-reset uses this class via app(); bind our Graph-capable version.
+        $this->app->bind(FilamentResetPassword::class, CustomResetPasswordNotification::class);
     }
 
     public function boot(): void
@@ -27,6 +31,8 @@ class AppServiceProvider extends ServiceProvider
                 ->paginationPageOptions([10, 25, 50, 100, 'all'])
                 ->defaultPaginationPageOption(100);
         });
+
+        EmailSetting::applyRuntimeMailConfig();
 
         $this->registerFriendlyCrudActivityLogs();
 

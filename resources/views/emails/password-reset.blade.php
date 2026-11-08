@@ -12,7 +12,7 @@
                 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="640" style="width:100%;max-width:640px;background:#ffffff;border:1px solid #e6edf5;border-radius:12px;overflow:hidden;">
                     <tr>
                         <td style="background:#f8fbff;padding:24px;text-align:center;border-bottom:1px solid #e6edf5;">
-                            <img src="{{ asset('images/brand/sitandgo-logo.png') }}" alt="Sit&Go" style="display:block;margin:0 auto;height:42px;max-width:100%;">
+                            <img src="{{ $logoSrc ?? asset('images/brand/sitandgo-logo.png') }}" alt="Sit&Go" style="display:block;margin:0 auto;height:42px;max-width:100%;">
                         </td>
                     </tr>
                     <tr>

@@ -2,12 +2,17 @@
 
 namespace App\Support;
 
+use App\Models\EmailSetting;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 
 class MicrosoftGraphMailer
 {
+    /**
+     * @param  list<string|array{path:string,name?:string,content_type?:string}>|null  $attachments
+     *         Absolute paths, local-disk relative paths, or structured attachment descriptors.
+     */
     public function sendHtml(
         string $fromEmail,
         string $toEmail,
@@ -16,15 +21,16 @@ class MicrosoftGraphMailer
         ?string $replyTo = null,
         ?string $attachmentPath = null,
         ?string $inlineLogoPath = null,
-        ?string $inlineLogoCid = null
-    ): void
-    {
-        $tenantId = trim((string) config('services.microsoft_o365.tenant_id'));
-        $clientId = trim((string) config('services.microsoft_o365.client_id'));
-        $clientSecret = trim((string) config('services.microsoft_o365.client_secret'));
+        ?string $inlineLogoCid = null,
+        ?array $attachments = null,
+    ): void {
+        $config = EmailSetting::graphConfig();
+        $tenantId = $config['tenant_id'];
+        $clientId = $config['client_id'];
+        $clientSecret = $config['client_secret'];
 
         if ($tenantId === '' || $clientId === '' || $clientSecret === '') {
-            throw new RuntimeException('Microsoft 365 OAuth is not configured. Set O365_TENANT_ID, O365_CLIENT_ID, and O365_CLIENT_SECRET.');
+            throw new RuntimeException('Microsoft 365 OAuth is not configured. Save Tenant ID, Client ID, and Client secret in System settings (or set O365_* env vars).');
         }
 
         if ($fromEmail === '') {
@@ -72,28 +78,24 @@ class MicrosoftGraphMailer
             ]];
         }
 
-        $attachments = [];
+        $graphAttachments = [];
 
+        $all = is_array($attachments) ? $attachments : [];
         if ($attachmentPath !== null && $attachmentPath !== '') {
-            $disk = Storage::disk('local');
+            array_unshift($all, $attachmentPath);
+        }
 
-            if (! $disk->exists($attachmentPath)) {
-                throw new RuntimeException("Attachment file not found: {$attachmentPath}");
+        foreach ($all as $item) {
+            $built = $this->buildFileAttachment($item);
+            if ($built !== null) {
+                $graphAttachments[] = $built;
             }
-
-            $attachmentContent = $disk->get($attachmentPath);
-            $attachments[] = [
-                '@odata.type' => '#microsoft.graph.fileAttachment',
-                'name' => basename($attachmentPath),
-                'contentType' => $disk->mimeType($attachmentPath) ?: 'application/octet-stream',
-                'contentBytes' => base64_encode($attachmentContent),
-            ];
         }
 
         if ($inlineLogoPath !== null && $inlineLogoPath !== '' && is_file($inlineLogoPath)) {
             $logoContent = @file_get_contents($inlineLogoPath);
             if ($logoContent !== false) {
-                $attachments[] = [
+                $graphAttachments[] = [
                     '@odata.type' => '#microsoft.graph.fileAttachment',
                     'name' => basename($inlineLogoPath),
                     'contentType' => 'image/png',
@@ -104,12 +106,12 @@ class MicrosoftGraphMailer
             }
         }
 
-        if ($attachments !== []) {
-            $message['attachments'] = $attachments;
+        if ($graphAttachments !== []) {
+            $message['attachments'] = $graphAttachments;
         }
 
         $sendResponse = Http::withToken($accessToken)
-            ->timeout(20)
+            ->timeout(60)
             ->post('https://graph.microsoft.com/v1.0/users/'.rawurlencode($fromEmail).'/sendMail', [
                 'message' => $message,
                 'saveToSentItems' => true,
@@ -118,5 +120,57 @@ class MicrosoftGraphMailer
         if (! $sendResponse->successful()) {
             throw new RuntimeException('Microsoft Graph send failed: '.$sendResponse->body());
         }
+    }
+
+    /**
+     * @param  string|array{path:string,name?:string,content_type?:string}  $item
+     * @return array<string, mixed>|null
+     */
+    private function buildFileAttachment(string|array $item): ?array
+    {
+        if (is_string($item)) {
+            $item = ['path' => $item];
+        }
+
+        $path = trim((string) ($item['path'] ?? ''));
+        if ($path === '') {
+            return null;
+        }
+
+        $disk = Storage::disk('local');
+        $contents = null;
+        $name = trim((string) ($item['name'] ?? ''));
+        $contentType = trim((string) ($item['content_type'] ?? ''));
+
+        if (is_file($path)) {
+            $contents = @file_get_contents($path);
+            if ($name === '') {
+                $name = basename($path);
+            }
+            if ($contentType === '') {
+                $contentType = mime_content_type($path) ?: 'application/octet-stream';
+            }
+        } elseif ($disk->exists($path)) {
+            $contents = $disk->get($path);
+            if ($name === '') {
+                $name = basename(str_replace('\\', '/', $path));
+            }
+            if ($contentType === '') {
+                $contentType = $disk->mimeType($path) ?: 'application/octet-stream';
+            }
+        } else {
+            throw new RuntimeException("Attachment file not found: {$path}");
+        }
+
+        if ($contents === false || $contents === null || $contents === '') {
+            throw new RuntimeException("Attachment file is empty: {$path}");
+        }
+
+        return [
+            '@odata.type' => '#microsoft.graph.fileAttachment',
+            'name' => $name,
+            'contentType' => $contentType !== '' ? $contentType : 'application/octet-stream',
+            'contentBytes' => base64_encode($contents),
+        ];
     }
 }

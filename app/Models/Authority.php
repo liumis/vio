@@ -16,5 +16,15 @@ class Authority extends Model
         'to_email',
         'email_pattern',
         'mail_template',
+        'informavimo_terminas',
+        'informavimo_terminas_tipas',
+        'info_pdf_template',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'informavimo_terminas' => 'integer',
+        ];
+    }
 }

@@ -18,7 +18,9 @@ class AuthorityResource extends Resource
 
     protected static ?string $navigationLabel = 'Authorities';
 
-    protected static ?int $navigationSort = 10;
+    protected static ?string $navigationGroup = 'Settings';
+
+    protected static ?int $navigationSort = 1;
 
     public static function form(Form $form): Form
     {
@@ -49,6 +51,29 @@ class AuthorityResource extends Resource
                 ->label('Mail template')
                 ->rows(8)
                 ->columnSpanFull(),
+            Forms\Components\TextInput::make('informavimo_terminas')
+                ->label('Informavimo terminas')
+                ->numeric()
+                ->minValue(1)
+                ->maxValue(365)
+                ->nullable()
+                ->helperText('Dienų skaičius nuo laiško / dokumento gavimo (instrukcija: 5 darbo dienos).'),
+            Forms\Components\Select::make('informavimo_terminas_tipas')
+                ->label('Termino tipas')
+                ->options([
+                    'working' => 'Darbo dienos',
+                    'calendar' => 'Kalendorinės dienos',
+                ])
+                ->default('working')
+                ->required(),
+            Forms\Components\Select::make('info_pdf_template')
+                ->label('Info PDF šablonas')
+                ->options([
+                    'vilnius' => 'Vilnius / savivaldybė (oficialus pranešimas)',
+                    'latvia' => 'Latvija CPP (pranešimas + Marksign)',
+                ])
+                ->nullable()
+                ->helperText('Jei pasirinkta — siunčiant laišką generuojamas PDF pavadinimu = registracijos Nr. (pvz. A51-56775.pdf) ir prisegamas kartu su gautu pranešimu. JUDU/Unipark/Julianus — palikti tuščią.'),
         ]);
     }
 
@@ -80,6 +105,28 @@ class AuthorityResource extends Resource
                     ->searchable()
                     ->limit(60)
                     ->tooltip(fn (Authority $record): string => (string) $record->mail_template),
+                Tables\Columns\TextColumn::make('informavimo_terminas')
+                    ->label('Informavimo terminas')
+                    ->formatStateUsing(function (?int $state, Authority $record): string {
+                        if ($state === null) {
+                            return '—';
+                        }
+                        $tipas = ($record->informavimo_terminas_tipas ?? 'working') === 'calendar'
+                            ? 'kal. d.'
+                            : 'd.d.';
+
+                        return $state.' '.$tipas;
+                    })
+                    ->sortable(),
+                Tables\Columns\TextColumn::make('info_pdf_template')
+                    ->label('Info PDF')
+                    ->formatStateUsing(fn (?string $state): string => match ($state) {
+                        'vilnius' => 'Vilnius',
+                        'latvia' => 'Latvija',
+                        default => '—',
+                    })
+                    ->badge()
+                    ->color(fn (?string $state): string => $state ? 'primary' : 'gray'),
                 Tables\Columns\TextColumn::make('created_at')
                     ->dateTime()
                     ->sortable()
