@@ -5,7 +5,7 @@ namespace Database\Seeders;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
-use RuntimeException;
+use RuntimeException; // used when reset-passwords is requested without a password
 
 /**
  * Prod/operators users only (idempotent by email).
@@ -37,10 +37,13 @@ class ProductionUsersSeeder extends Seeder
 
             if ($existing === null) {
                 if ($password === '') {
-                    throw new RuntimeException(
-                        'VIO_BOOTSTRAP_PASSWORD is required to create user '.$row['email']
-                        .' (set it in .env for production bootstrap).'
+                    // Do not fail the whole Cloud deploy — settings/authorities can still seed.
+                    $this->command?->warn(
+                        'Skipped creating '.$row['email']
+                        .' (set VIO_BOOTSTRAP_PASSWORD in Laravel Cloud env, then re-run vio:bootstrap-production).'
                     );
+
+                    continue;
                 }
 
                 User::query()->create([
