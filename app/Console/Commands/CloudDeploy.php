@@ -44,7 +44,7 @@ class CloudDeploy extends Command
                 ['users', Schema::hasTable('users') ? (string) User::query()->count() : 'n/a'],
                 ['authorities', Schema::hasTable('authorities') ? (string) Authority::query()->count() : 'n/a'],
                 ['email_settings', Schema::hasTable('email_settings') ? (string) EmailSetting::query()->count() : 'n/a'],
-                ['VIO_BOOTSTRAP_PASSWORD', filled(env('VIO_BOOTSTRAP_PASSWORD')) ? 'set' : 'MISSING (new users skipped)'],
+                ['VIO_BOOTSTRAP_PASSWORD', filled(config('vio.bootstrap_password')) ? 'set' : 'MISSING (new users skipped)'],
             ]
         );
 

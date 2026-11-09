@@ -29,8 +29,9 @@ class ProductionUsersSeeder extends Seeder
 
     public function run(): void
     {
-        $password = trim((string) env('VIO_BOOTSTRAP_PASSWORD', ''));
-        $reset = filter_var(env('VIO_BOOTSTRAP_RESET_PASSWORDS', false), FILTER_VALIDATE_BOOLEAN);
+        // Must use config() — env() is null after config:cache on Cloud.
+        $password = trim((string) config('vio.bootstrap_password', ''));
+        $reset = (bool) config('vio.bootstrap_reset_passwords', false);
 
         foreach (self::users() as $row) {
             $existing = User::query()->where('email', $row['email'])->first();
