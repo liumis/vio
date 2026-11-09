@@ -59,7 +59,7 @@
         ],
         "deploy": [
             "Composer\\Config::disableProcessTimeout",
-            "@php artisan vio:bootstrap-production --migrate --optimize-clear"
+            "@php artisan vio:cloud-deploy"
         ]
     },
     "extra": {
