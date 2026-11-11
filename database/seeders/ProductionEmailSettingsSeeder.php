@@ -8,7 +8,7 @@ use Illuminate\Database\Seeder;
 
 /**
  * System settings for prod (email / Graph / SharePoint / Wheelsys / MarkSign / debt tracker).
- * Secrets are taken from .env (never committed). Non-secret defaults are upserted.
+ * Secrets come from Cloud env via config/* (config:cache safe). Never commit secrets.
  */
 class ProductionEmailSettingsSeeder extends Seeder
 {
@@ -17,56 +17,73 @@ class ProductionEmailSettingsSeeder extends Seeder
         $settings = EmailSetting::current();
 
         $payload = [
-            'from_name' => env('MAIL_FROM_NAME', 'Sit&Go cars rent'),
-            'from_email' => env('MAIL_FROM_ADDRESS', 'administration@greenlease.com'),
-            'reply_to' => env('MAIL_REPLY_TO_ADDRESS', 'administration@greenlease.com'),
-            'subject' => env('VIO_EMAIL_SUBJECT', 'Violation notification'),
-            'inbox_mailbox' => env('VIO_INBOX_MAILBOX', 'administration@greenlease.lt'),
-            'o365_enabled' => filter_var(env('O365_MAIL_ENABLED', true), FILTER_VALIDATE_BOOLEAN),
-            'o365_tenant_id' => env('O365_TENANT_ID') ?: $settings->o365_tenant_id,
-            'o365_client_id' => env('O365_CLIENT_ID') ?: $settings->o365_client_id,
-            'smtp_host' => env('MAIL_HOST', 'smtp.office365.com'),
-            'smtp_port' => (int) env('MAIL_PORT', 587),
-            'smtp_encryption' => env('MAIL_ENCRYPTION', 'tls'),
-            'smtp_username' => env('MAIL_USERNAME') ?: $settings->smtp_username,
-            'sharepoint_site_url' => env('SHAREPOINT_SITE_URL', config('services.sharepoint.site_url')),
-            'sharepoint_folder_path' => env(
-                'SHAREPOINT_FOLDER_PATH',
-                config('services.sharepoint.folder_path')
-            ),
-            'wheelsys_username' => env('WHEELSYS_USERNAME') ?: ($settings->wheelsys_username ?: 'IT'),
-            'wheelsys_manual_username' => env('WHEELSYS_MANUAL_USERNAME')
+            'from_name' => (string) config('mail.from.name', 'Sit&Go cars rent'),
+            'from_email' => (string) config('mail.from.address', 'administration@greenlease.com'),
+            'reply_to' => (string) config('vio.mail_reply_to', 'administration@greenlease.com'),
+            'subject' => (string) config('vio.email_subject', 'Violation notification'),
+            'inbox_mailbox' => (string) config('vio.inbox_mailbox', 'administration@greenlease.lt'),
+            'o365_enabled' => (bool) config('services.microsoft_o365.enabled', true),
+            'o365_tenant_id' => config('services.microsoft_o365.tenant_id') ?: $settings->o365_tenant_id,
+            'o365_client_id' => config('services.microsoft_o365.client_id') ?: $settings->o365_client_id,
+            'smtp_host' => (string) config('mail.mailers.smtp.host', 'smtp.office365.com'),
+            'smtp_port' => (int) config('mail.mailers.smtp.port', 587),
+            'smtp_encryption' => (string) config('vio.smtp_encryption', 'tls'),
+            'smtp_username' => config('mail.mailers.smtp.username') ?: $settings->smtp_username,
+            'sharepoint_site_url' => config('services.sharepoint.site_url') ?: $settings->sharepoint_site_url,
+            'sharepoint_folder_path' => config('services.sharepoint.folder_path') ?: $settings->sharepoint_folder_path,
+            'wheelsys_username' => config('services.wheelsys.username')
+                ?: ($settings->wheelsys_username ?: 'IT'),
+            'wheelsys_manual_username' => config('services.wheelsys.manual_username')
                 ?: ($settings->wheelsys_manual_username ?: 'Liudas'),
-            'marksign_signer_email' => env('MARKSIGN_SIGNER_EMAIL', 'mykolas@sitandgo.lt'),
-            'marksign_signer_name' => env('MARKSIGN_SIGNER_NAME', 'Mykolas Sabaitis'),
-            'debt_tracker_google_url' => env(
-                'DEBT_TRACKER_GOOGLE_URL',
+            'marksign_signer_email' => config('services.marksign.signer_email', 'mykolas@sitandgo.lt'),
+            'marksign_signer_name' => config('services.marksign.signer_name', 'Mykolas Sabaitis'),
+            'debt_tracker_google_url' => config(
+                'vio.debt_tracker_google_url',
                 DebtTrackerService::DEFAULT_GOOGLE_URL
             ),
-            'debt_tracker_url' => env('DEBT_TRACKER_SHAREPOINT_URL') ?: $settings->debt_tracker_url,
-            'debt_tracker_sheet' => env('DEBT_TRACKER_SHEET', DebtTrackerService::DEFAULT_SHEET),
-            'debt_tracker_file_name' => env('DEBT_TRACKER_FILE_NAME', DebtTrackerService::DEFAULT_FILE_NAME),
+            'debt_tracker_url' => config('vio.debt_tracker_sharepoint_url') ?: $settings->debt_tracker_url,
+            'debt_tracker_sheet' => config('vio.debt_tracker_sheet', DebtTrackerService::DEFAULT_SHEET),
+            'debt_tracker_file_name' => config('vio.debt_tracker_file_name', DebtTrackerService::DEFAULT_FILE_NAME),
         ];
 
-        // Secrets: write into DB only when present in env (Settings UI + runtime).
-        if (filled(env('O365_CLIENT_SECRET'))) {
-            $payload['o365_client_secret'] = env('O365_CLIENT_SECRET');
+        // Secrets: write into DB only when present in config (Settings UI + runtime).
+        $o365Secret = config('services.microsoft_o365.client_secret');
+        if (filled($o365Secret)) {
+            $payload['o365_client_secret'] = $o365Secret;
         }
-        if (filled(env('MAIL_PASSWORD'))) {
-            $payload['smtp_password'] = env('MAIL_PASSWORD');
+
+        $mailPassword = config('mail.mailers.smtp.password');
+        if (filled($mailPassword)) {
+            $payload['smtp_password'] = $mailPassword;
         }
-        if (filled(env('WHEELSYS_PASSWORD'))) {
-            $payload['wheelsys_password'] = env('WHEELSYS_PASSWORD');
+
+        $wheelsysPassword = config('services.wheelsys.password');
+        if (filled($wheelsysPassword)) {
+            $payload['wheelsys_password'] = $wheelsysPassword;
         }
-        if (filled(env('WHEELSYS_MANUAL_PASSWORD'))) {
-            $payload['wheelsys_manual_password'] = env('WHEELSYS_MANUAL_PASSWORD');
+
+        $wheelsysManualPassword = config('services.wheelsys.manual_password');
+        if (filled($wheelsysManualPassword)) {
+            $payload['wheelsys_manual_password'] = $wheelsysManualPassword;
         }
-        if (filled(env('MARKSIGN_TOKEN'))) {
-            $payload['marksign_token'] = env('MARKSIGN_TOKEN');
+
+        $marksignToken = config('services.marksign.token');
+        if (filled($marksignToken)) {
+            $payload['marksign_token'] = $marksignToken;
         }
 
         $settings->fill($payload)->save();
 
-        $this->command?->info('Email / system settings upserted (secrets from .env when set).');
+        $this->command?->info('Email / system settings upserted (secrets from config/env when set).');
+        $this->command?->table(
+            ['Check', 'Value'],
+            [
+                ['O365 tenant', filled($payload['o365_tenant_id'] ?? null) ? 'set' : 'missing'],
+                ['O365 client', filled($payload['o365_client_id'] ?? null) ? 'set' : 'missing'],
+                ['O365 secret', filled($o365Secret) ? 'set' : 'missing'],
+                ['Wheelsys password', filled($wheelsysPassword) ? 'set' : 'missing'],
+                ['MarkSign token', filled($marksignToken) ? 'set' : 'missing'],
+            ]
+        );
     }
 }

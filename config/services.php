@@ -36,6 +36,8 @@ return [
         'import_path' => env('WHEELSYS_IMPORT_PATH', '/ui/manage/tasks/import.aspx'),
         'username' => env('WHEELSYS_USERNAME'),
         'password' => env('WHEELSYS_PASSWORD'),
+        'manual_username' => env('WHEELSYS_MANUAL_USERNAME'),
+        'manual_password' => env('WHEELSYS_MANUAL_PASSWORD'),
         // Ticket Type must match Wheelsys support list Description
         // (Company → Manage Support Lists → Fleet → Traffic Violation Types).
         'default_ticket_type' => env('WHEELSYS_DEFAULT_TICKET_TYPE', 'Administration violation'),

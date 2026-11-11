@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Pages\IncomingFines;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -23,6 +24,6 @@ class ExampleTest extends TestCase
 
         $response = $this->actingAs($user)->get('/');
 
-        $response->assertRedirect(route('filament.admin.resources.imports.index'));
+        $response->assertRedirect(IncomingFines::getUrl());
     }
 }
