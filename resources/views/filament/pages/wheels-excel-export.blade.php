@@ -207,11 +207,27 @@
 
                     @if ($isOpen)
                         <div class="vio-acc-body">
+                            @php
+                                $selectableInGroup = 0;
+                                foreach ($groupLogs as $groupLog) {
+                                    if ($this->rowIsSelectable($groupLog)) {
+                                        $selectableInGroup++;
+                                    }
+                                }
+                            @endphp
                             <div class="vio-acc-actions">
                                 @if (! empty($group['is_new']))
-                                    <x-filament::button size="xs" color="success" wire:click="selectGroup(@js($groupKey))">
-                                        Select all ready
-                                    </x-filament::button>
+                                    {{-- Native button: Filament <x-filament::button> breaks wire:click with @js / nested quotes. --}}
+                                    @if ($selectableInGroup > 0)
+                                        <button
+                                            type="button"
+                                            wire:click="selectGroup('{{ $groupKey }}')"
+                                            class="inline-flex items-center justify-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm"
+                                            style="background:#16a34a; border:0; cursor:pointer;"
+                                        >
+                                            Select all ready
+                                        </button>
+                                    @endif
                                 @else
                                     @if (! empty($group['sharepoint_url']))
                                         <x-filament::button
@@ -225,9 +241,16 @@
                                             Open file
                                         </x-filament::button>
                                     @endif
-                                    <x-filament::button size="xs" color="gray" wire:click="selectGroup(@js($groupKey))">
-                                        Select ready in file
-                                    </x-filament::button>
+                                    @if ($selectableInGroup > 0)
+                                        <button
+                                            type="button"
+                                            wire:click="selectGroup('{{ $groupKey }}')"
+                                            class="inline-flex items-center justify-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200"
+                                            style="background:#fff; cursor:pointer;"
+                                        >
+                                            Select ready in file
+                                        </button>
+                                    @endif
                                 @endif
                             </div>
 

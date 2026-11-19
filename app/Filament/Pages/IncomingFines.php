@@ -34,13 +34,13 @@ class IncomingFines extends Page implements HasForms
 
     protected static ?string $navigationIcon = 'heroicon-o-inbox';
 
-    protected static ?string $navigationLabel = 'New fines';
+    protected static ?string $navigationLabel = '1. New fines';
 
     protected static ?string $navigationGroup = 'Fines';
 
     protected static ?string $title = 'New fines';
 
-    protected static ?int $navigationSort = 10;
+    protected static ?int $navigationSort = 1;
 
     protected static string $view = 'filament.pages.incoming-fines';
 
@@ -158,37 +158,138 @@ class IncomingFines extends Page implements HasForms
         return ['' => 'All authorities', 'unmatched' => 'Unmatched (—)'] + $options;
     }
 
-    public function clearAuthorityFilter(): void
+    /**
+     * '' | asc | desc — Status column sort (click header to cycle).
+     */
+    public string $statusSort = '';
+
+    /**
+     * Stable status key used by chips, filter, and sort (matches Status column labels).
+     *
+     * @param  array<string, mixed>  $row
+     */
+    public function rowStatusKey(array $row): string
     {
-        $this->data['authority_id'] = null;
+        $lookup = $row['lookup_status'] ?? null;
+
+        if (! empty($row['excel_exported'])) {
+            return 'already_have_prepared';
+        }
+        if (! empty($row['in_excel_queue'])) {
+            return 'already_have_ready';
+        }
+        if (! empty($row['in_vio']) && $lookup === 'found') {
+            return 'already_have_found';
+        }
+        if ($lookup === 'not_found') {
+            return 'not_found';
+        }
+        if (! empty($row['in_vio'])) {
+            return 'already_have';
+        }
+        if ($lookup === 'found') {
+            return 'found';
+        }
+
+        return 'new';
     }
 
     /**
-     * Fetched rows filtered by Authority select (preserves original indexes for Preview/Process).
+     * @return array<string, string>
+     */
+    public function getStatusFilterOptionsProperty(): array
+    {
+        return [
+            '' => 'All statuses',
+            'new' => 'New',
+            'not_found' => 'Not found · retry',
+            'found' => 'Found',
+            'already_have' => 'Already have',
+            'already_have_found' => 'Already have · Found',
+            'already_have_ready' => 'Already have · Ready',
+            'already_have_prepared' => 'Already have · Prepared',
+        ];
+    }
+
+    public function clearListFilters(): void
+    {
+        $this->data['authority_id'] = null;
+        $this->data['status'] = null;
+        $this->statusSort = '';
+    }
+
+    /** @deprecated Use clearListFilters() */
+    public function clearAuthorityFilter(): void
+    {
+        $this->clearListFilters();
+    }
+
+    public function toggleStatusSort(): void
+    {
+        $this->statusSort = match ($this->statusSort) {
+            'asc' => 'desc',
+            'desc' => '',
+            default => 'asc',
+        };
+    }
+
+    /**
+     * Fetched rows filtered by Authority + Status (preserves original indexes for Preview/Process).
      *
      * @return array<int, array<string, mixed>>
      */
     public function getFilteredResultsProperty(): array
     {
-        $filter = $this->data['authority_id'] ?? null;
-        if ($filter === null || $filter === '') {
-            return $this->results;
+        $rows = $this->results;
+
+        $authority = $this->data['authority_id'] ?? null;
+        if ($authority !== null && $authority !== '') {
+            // Keep original keys so process() indexes stay valid.
+            if ($authority === 'unmatched') {
+                $rows = array_filter(
+                    $rows,
+                    static fn (array $row): bool => empty($row['authority_id'])
+                );
+            } else {
+                $id = (int) $authority;
+                $rows = array_filter(
+                    $rows,
+                    static fn (array $row): bool => (int) ($row['authority_id'] ?? 0) === $id
+                );
+            }
         }
 
-        // Keep original keys so process() indexes stay valid.
-        if ($filter === 'unmatched') {
-            return array_filter(
-                $this->results,
-                static fn (array $row): bool => empty($row['authority_id'])
+        $status = $this->data['status'] ?? null;
+        if ($status !== null && $status !== '') {
+            $rows = array_filter(
+                $rows,
+                fn (array $row): bool => $this->rowStatusKey($row) === $status
             );
         }
 
-        $id = (int) $filter;
+        if ($this->statusSort === 'asc' || $this->statusSort === 'desc') {
+            $order = [
+                'new' => 1,
+                'not_found' => 2,
+                'found' => 3,
+                'already_have' => 4,
+                'already_have_found' => 5,
+                'already_have_ready' => 6,
+                'already_have_prepared' => 7,
+            ];
+            $dir = $this->statusSort === 'asc' ? 1 : -1;
+            uasort(
+                $rows,
+                function (array $a, array $b) use ($order, $dir): int {
+                    $ra = $order[$this->rowStatusKey($a)] ?? 99;
+                    $rb = $order[$this->rowStatusKey($b)] ?? 99;
 
-        return array_filter(
-            $this->results,
-            static fn (array $row): bool => (int) ($row['authority_id'] ?? 0) === $id
-        );
+                    return ($ra <=> $rb) * $dir;
+                }
+            );
+        }
+
+        return $rows;
     }
 
     public function fetch(): void
@@ -515,7 +616,9 @@ class IncomingFines extends Page implements HasForms
 
         if ($messageId !== '') {
             try {
-                $this->sourceMailHtml = $inbox->getMessageBodyHtml($messageId);
+                $this->sourceMailHtml = $this->prepareInboundMailHtml(
+                    $inbox->getMessageBodyHtml($messageId)
+                );
             } catch (Throwable) {
                 $this->sourceMailHtml = '';
             }
@@ -528,6 +631,16 @@ class IncomingFines extends Page implements HasForms
             }
         } else {
             $this->sourceMailText = trim((string) ($row['preview'] ?? ''));
+        }
+
+        // Prefer a rendered HTML preview even when Graph only returns plain text.
+        if ($this->sourceMailHtml === '' && $this->sourceMailText !== '') {
+            $this->sourceMailHtml = $this->prepareInboundMailHtml(
+                '<pre style="white-space:pre-wrap;margin:0;font:inherit;">'
+                .e($this->sourceMailText)
+                .'</pre>'
+            );
+            $this->sourceMailText = '';
         }
 
         $dir = trim(str_replace('\\', '/', (string) ($row['local_attachment_dir'] ?? '')), '/');
@@ -580,6 +693,36 @@ class IncomingFines extends Page implements HasForms
                 // Non-fatal — operator can still read the mail body.
             }
         }
+    }
+
+    /**
+     * Graph HTML for iframe preview: strip scripts/handlers, keep final layout/CSS.
+     */
+    private function prepareInboundMailHtml(string $html): string
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return '';
+        }
+
+        // If Graph/store handed us escaped markup, unescape once so the iframe renders it.
+        if (! str_contains($html, '<') && str_contains($html, '&lt;')) {
+            $html = html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        }
+
+        $html = preg_replace('/<script\b[^>]*>.*?<\/script>/is', '', $html) ?? $html;
+        $html = preg_replace('/on\w+\s*=\s*(".*?"|\'.*?\'|[^\s>]+)/i', '', $html) ?? $html;
+        $html = preg_replace('/javascript\s*:/i', '', $html) ?? $html;
+
+        if (! preg_match('/<html[\s>]/i', $html)) {
+            $html = '<!DOCTYPE html><html><head><meta charset="utf-8">'
+                .'<meta name="viewport" content="width=device-width, initial-scale=1">'
+                .'<base target="_blank" rel="noopener">'
+                .'<style>body{margin:16px;font:14px/1.45 system-ui,sans-serif;color:#0f172a;word-break:break-word;} img{max-width:100%;height:auto;}</style>'
+                .'</head><body>'.$html.'</body></html>';
+        }
+
+        return $html;
     }
 
     private function sourceFileKind(string $name): string

@@ -319,12 +319,17 @@
 
     @php
         $filteredResults = $this->filteredResults;
-        $filterActive = filled($data['authority_id'] ?? null);
+        $filterActive = filled($data['authority_id'] ?? null) || filled($data['status'] ?? null) || filled($this->statusSort);
+        $statusSortIcon = match ($this->statusSort) {
+            'asc' => '↑',
+            'desc' => '↓',
+            default => '↕',
+        };
     @endphp
 
     @if (count($results) > 0)
         <div class="mt-5 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <label class="block min-w-[16rem] flex-1 text-sm">
+            <label class="block min-w-[14rem] flex-1 text-sm">
                 <span class="text-xs font-semibold uppercase tracking-wide text-slate-500">Authority</span>
                 <select
                     wire:model.live="data.authority_id"
@@ -335,11 +340,22 @@
                         <option value="{{ $value }}">{{ $label }}</option>
                     @endforeach
                 </select>
-                <span class="mt-1.5 block text-xs text-slate-500">Filters this list only — does not re-scan inbox.</span>
+            </label>
+            <label class="block min-w-[14rem] flex-1 text-sm">
+                <span class="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</span>
+                <select
+                    wire:model.live="data.status"
+                    class="mt-1.5 w-full rounded-lg border-slate-300 text-sm shadow-sm"
+                    style="padding: 10px 12px;"
+                >
+                    @foreach ($this->statusFilterOptions as $value => $label)
+                        <option value="{{ $value }}">{{ $label }}</option>
+                    @endforeach
+                </select>
             </label>
             @if ($filterActive)
-                <x-filament::button size="sm" color="gray" wire:click="clearAuthorityFilter">
-                    Clear filter
+                <x-filament::button size="sm" color="gray" wire:click="clearListFilters">
+                    Clear filters
                 </x-filament::button>
             @endif
             <p class="ml-auto text-xs text-slate-500 pb-1">
@@ -347,6 +363,7 @@
                 @if ($filterActive)
                     · filtered
                 @endif
+                <span class="mt-1.5 block text-xs text-slate-500">Filters this list only — does not re-scan inbox.</span>
             </p>
         </div>
 
@@ -361,7 +378,18 @@
                             <th>Authority</th>
                             <th>Informavimas</th>
                             <th>Plate / rental</th>
-                            <th>Status</th>
+                            <th>
+                                <button
+                                    type="button"
+                                    wire:click="toggleStatusSort"
+                                    class="inline-flex items-center gap-1 uppercase tracking-wide"
+                                    style="font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer;"
+                                    title="Sort by status"
+                                >
+                                    Status
+                                    <span aria-hidden="true" style="opacity: {{ $this->statusSort === '' ? '0.45' : '1' }};">{{ $statusSortIcon }}</span>
+                                </button>
+                            </th>
                             <th></th>
                         </tr>
                     </thead>
@@ -479,7 +507,7 @@
                 </table>
             </div>
         @else
-            <p class="mt-2 text-sm text-gray-500">No messages for the selected authority. Clear the filter or fetch again.</p>
+            <p class="mt-2 text-sm text-gray-500">No messages match the current filters. Clear filters or fetch again.</p>
         @endif
 
         @unless ($showPreview)
@@ -775,15 +803,14 @@
 
                         @if ($sourceMailHtml !== '')
                             <p class="text-[10px] font-semibold uppercase text-amber-800" style="margin: 0 0 6px;">Inbound mail</p>
+                            {{-- Single htmlspecialchars for srcdoc — {{ e() }} double-escaped and showed raw source. --}}
                             <iframe
-                                title="Original email"
+                                wire:ignore
+                                title="Inbound email"
                                 sandbox=""
-                                srcdoc="{{ e($sourceMailHtml) }}"
+                                srcdoc="{!! htmlspecialchars($sourceMailHtml, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') !!}"
                                 style="width:100%;height:280px;border:1px solid #fdba74;border-radius:8px;background:#fff;"
                             ></iframe>
-                        @elseif ($sourceMailText !== '')
-                            <p class="text-[10px] font-semibold uppercase text-amber-800" style="margin: 0 0 6px;">Inbound mail (text)</p>
-                            <pre class="overflow-auto rounded-lg bg-white text-xs text-slate-800 ring-1 ring-amber-200" style="max-height:220px;padding:12px;white-space:pre-wrap;">{{ $sourceMailText }}</pre>
                         @endif
 
                         @if ($sourceExtractText !== '')

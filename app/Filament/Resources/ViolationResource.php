@@ -6,6 +6,7 @@ use App\Filament\Resources\ViolationResource\Pages;
 use App\Models\FineProcessLog;
 use App\Support\ChargebackNoticeService;
 use App\Support\DebtTrackerService;
+use App\Support\FineReplyReadiness;
 use App\Support\IncomingFineReplyBuilder;
 use App\Support\IncomingFineReplySender;
 use App\Support\InformavimoTerminas;
@@ -28,7 +29,7 @@ class ViolationResource extends Resource
 
     protected static ?string $navigationIcon = 'heroicon-o-exclamation-triangle';
 
-    protected static ?string $navigationLabel = 'Imported fines';
+    protected static ?string $navigationLabel = '3. Imported fines';
 
     protected static ?string $navigationGroup = 'Fines';
 
@@ -38,7 +39,7 @@ class ViolationResource extends Resource
 
     protected static ?string $pluralModelLabel = 'imported fines';
 
-    protected static ?int $navigationSort = 60;
+    protected static ?int $navigationSort = 3;
 
     public static function form(Form $form): Form
     {
@@ -62,6 +63,9 @@ class ViolationResource extends Resource
         return $table
             ->defaultSort('wheels_exported_at', 'desc')
             ->columns([
+                Tables\Columns\ViewColumn::make('reply_ready')
+                    ->label('Reply')
+                    ->view('filament.tables.columns.reply-readiness-bubble'),
                 Tables\Columns\TextColumn::make('wheels_import_status')
                     ->label('Wheels')
                     ->badge()
@@ -186,6 +190,23 @@ class ViolationResource extends Resource
 
                         return $query->where('wheels_import_status', $value);
                     }),
+                Tables\Filters\SelectFilter::make('reply_mail')
+                    ->label('Authority reply')
+                    ->options([
+                        'sent' => 'Already sent',
+                        'not_sent' => 'Not sent yet',
+                    ])
+                    ->query(function (Builder $query, array $data): Builder {
+                        $value = $data['value'] ?? null;
+                        if ($value === 'sent') {
+                            return $query->whereNotNull('email_sent_at');
+                        }
+                        if ($value === 'not_sent') {
+                            return $query->whereNull('email_sent_at');
+                        }
+
+                        return $query;
+                    }),
                 Tables\Filters\SelectFilter::make('chargeback_status')
                     ->label('Chargeback')
                     ->options([
@@ -202,58 +223,66 @@ class ViolationResource extends Resource
                     ->openUrlInNewTab()
                     ->visible(fn (FineProcessLog $record): bool => filled($record->documentSharePointUrl()))
                     ->tooltip('Fine PDF on SharePoint'),
-                Tables\Actions\Action::make('sendPolandReply')
-                    ->label('Atsakymas Lenkijai')
+                Tables\Actions\Action::make('sendAuthorityReply')
+                    ->label('Send reply')
                     ->icon('heroicon-o-envelope')
-                    ->color('info')
+                    ->color(fn (FineProcessLog $record): string => FineReplyReadiness::forLog($record)['ready'] ? 'success' : 'warning')
                     ->visible(function (FineProcessLog $record): bool {
                         if (filled($record->email_sent_at)) {
                             return false;
                         }
-                        $ref = strtoupper(trim((string) ($record->reference ?? '')));
-                        $authority = strtolower(trim((string) ($record->authority_name ?? '')));
-                        $pattern = strtolower(trim((string) ($record->authority?->email_pattern ?? '')));
+                        $info = FineReplyReadiness::forLog($record);
 
-                        return str_starts_with($ref, 'CAN')
-                            || str_contains($authority, 'lenkij')
-                            || str_contains($authority, 'gitd')
-                            || str_contains($pattern, 'gitd.gov.pl');
+                        return $info['channel'] !== 'epaslaugos';
                     })
-                    ->modalHeading('Lenkija CAN · el. paštas canard@gitd.gov.pl')
-                    ->modalDescription('Instrukcija: Subject = bylos nr. + valst. nr. Pridedamas gautas fizinio laiško PDF.')
-                    ->modalSubmitActionLabel('Siųsti')
+                    ->modalHeading(fn (FineProcessLog $record): string => 'Send authority reply · '.($record->reference ?: $record->vehicle ?: '#'.$record->id))
+                    ->modalDescription('Pulls driver details from Wheelsys when possible. Green Reply bubble = required template fields present.')
+                    ->modalSubmitActionLabel('Send')
                     ->fillForm(function (FineProcessLog $record): array {
+                        $wheelsys = FineReplyReadiness::enrichAndStore($record);
                         try {
-                            $draft = app(IncomingFineReplyBuilder::class)->buildForProcessLog($record);
-                        } catch (Throwable) {
-                            $draft = [];
+                            $draft = app(IncomingFineReplyBuilder::class)->buildForProcessLog($record->fresh(), $wheelsys);
+                        } catch (Throwable $e) {
+                            return [
+                                'to' => '',
+                                'subject' => trim(($record->reference ?? '').' '.($record->vehicle ?? '')),
+                                'body_text' => '',
+                                'readiness_note' => 'Draft build failed: '.$e->getMessage(),
+                            ];
                         }
 
+                        $info = FineReplyReadiness::forLog($record->fresh(), $wheelsys);
+
                         return [
-                            'to' => $draft['to'] ?? 'canard@gitd.gov.pl',
-                            'subject' => $draft['subject'] ?? trim(($record->reference ?? '').' '.($record->vehicle ?? '')),
+                            'to' => $draft['to'] ?? '',
+                            'subject' => $draft['subject'] ?? '',
                             'body_text' => $draft['body_text'] ?? '',
+                            'readiness_note' => $info['detail'],
                         ];
                     })
                     ->form([
+                        Forms\Components\TextInput::make('readiness_note')
+                            ->label('Validation')
+                            ->disabled()
+                            ->dehydrated(false),
                         Forms\Components\TextInput::make('to')
                             ->label('To')
                             ->required()
-                            ->email()
-                            ->default('canard@gitd.gov.pl'),
+                            ->email(),
                         Forms\Components\TextInput::make('subject')
-                            ->label('Subject (bylos nr. + valst. nr.)')
+                            ->label('Subject')
                             ->required()
                             ->maxLength(255),
                         Forms\Components\Textarea::make('body_text')
                             ->label('Laiško tekstas')
-                            ->rows(8)
+                            ->rows(10)
                             ->required(),
                     ])
                     ->action(function (FineProcessLog $record, array $data): void {
                         try {
-                            $draft = app(IncomingFineReplyBuilder::class)->buildForProcessLog($record);
-                            $draft['to'] = trim((string) ($data['to'] ?? 'canard@gitd.gov.pl'));
+                            $wheelsys = FineReplyReadiness::enrichAndStore($record);
+                            $draft = app(IncomingFineReplyBuilder::class)->buildForProcessLog($record->fresh(), $wheelsys);
+                            $draft['to'] = trim((string) ($data['to'] ?? ''));
                             $draft['subject'] = trim((string) ($data['subject'] ?? ''));
                             $draft['body_text'] = (string) ($data['body_text'] ?? '');
                             $draft = app(IncomingFineReplyBuilder::class)->refreshHtml($draft);
@@ -261,28 +290,26 @@ class ViolationResource extends Resource
                             $log = app(IncomingFineReplySender::class)->send($draft, $record);
 
                             $workflow = is_array($log->workflow) ? $log->workflow : [];
+                            $workflow['wheelsys'] = $wheelsys;
                             if (is_array($workflow['steps'] ?? null)) {
-                                $workflow['steps'] = array_map(function (array $step): array {
-                                    if (($step['key'] ?? '') === 'poland_reply') {
-                                        $step['ok'] = true;
-                                        $step['detail'] = 'Sent to canard@gitd.gov.pl';
-                                    }
-
-                                    return $step;
-                                }, $workflow['steps']);
-                                $log->fill(['workflow' => $workflow])->save();
+                                $workflow['steps'][] = [
+                                    'key' => 'authority_reply',
+                                    'ok' => true,
+                                    'detail' => 'Sent to '.$draft['to'],
+                                ];
                             }
+                            $log->fill(['workflow' => $workflow])->save();
 
                             Notification::make()
                                 ->success()
-                                ->title('Lenkijos atsakymas išsiųstas')
+                                ->title('Authority reply sent')
                                 ->body($draft['to'].' · '.$draft['subject'])
                                 ->persistent()
                                 ->send();
                         } catch (Throwable $e) {
                             Notification::make()
                                 ->danger()
-                                ->title('Siuntimas nepavyko')
+                                ->title('Send failed')
                                 ->body($e->getMessage())
                                 ->persistent()
                                 ->send();

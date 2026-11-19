@@ -70,10 +70,42 @@ class AdminPanelProvider extends PanelProvider
         padding-inline: 0 !important;
     }
 
-    /* Manual search + New manual fine — clear CTA buttons (pair under each other). */
-    .fi-sidebar-item:has(> a.fi-sidebar-item-button[href*="wheelsys-manual-search"]) {
-        margin-top: 0.85rem !important;
+    /* Fines = core 3-step workflow — highlight the whole group. */
+    .fi-sidebar-nav .fi-sidebar-group:has(a.fi-sidebar-item-button[href*="incoming-fines"]) {
+        margin: 0.35rem 0.45rem 0.85rem !important;
+        padding: 0.55rem 0.4rem 0.65rem !important;
+        border-radius: 0.85rem !important;
+        background:
+            linear-gradient(180deg, rgba(46, 204, 113, 0.12) 0%, rgba(34, 58, 78, 0.06) 100%),
+            #f4faf7 !important;
+        border: 1px solid #86efac !important;
+        box-shadow: 0 8px 22px rgba(34, 58, 78, 0.08) !important;
     }
+    .fi-sidebar-nav .fi-sidebar-group:has(a.fi-sidebar-item-button[href*="incoming-fines"]) > .fi-sidebar-group-button,
+    .fi-sidebar-nav .fi-sidebar-group:has(a.fi-sidebar-item-button[href*="incoming-fines"]) .fi-sidebar-group-label {
+        color: #166534 !important;
+        font-weight: 800 !important;
+        letter-spacing: 0.04em !important;
+        text-transform: uppercase !important;
+        font-size: 0.7rem !important;
+    }
+    .fi-sidebar-nav .fi-sidebar-group:has(a.fi-sidebar-item-button[href*="incoming-fines"]) .fi-sidebar-group-label::after {
+        content: " · 3 steps";
+        font-weight: 650;
+        opacity: 0.75;
+        text-transform: none;
+        letter-spacing: 0;
+    }
+    .fi-sidebar-nav .fi-sidebar-group:has(a.fi-sidebar-item-button[href*="incoming-fines"]) a.fi-sidebar-item-button {
+        border-radius: 0.6rem !important;
+        font-weight: 650 !important;
+        margin-top: 0.2rem !important;
+    }
+    .fi-sidebar-nav .fi-sidebar-group:has(a.fi-sidebar-item-button[href*="incoming-fines"]) a.fi-sidebar-item-button:hover {
+        background: rgba(255, 255, 255, 0.72) !important;
+    }
+
+    /* Tools CTAs — Manual search / New manual fine */
     a.fi-sidebar-item-button[href*="wheelsys-manual-search"],
     a.fi-sidebar-item-button[href*="/new-fine"] {
         border-radius: 0.65rem !important;
@@ -146,6 +178,7 @@ HTML),
             ->sidebarCollapsibleOnDesktop()
             ->navigationGroups([
                 NavigationGroup::make('Fines')->collapsed(false),
+                NavigationGroup::make('Tools')->collapsed(false),
                 NavigationGroup::make('Settings')->collapsed(false),
             ])
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')

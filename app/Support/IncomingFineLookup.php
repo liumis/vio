@@ -102,8 +102,10 @@ final class IncomingFineLookup
                     $fields['vehicle'],
                     $fields['ticket_date'] !== '' ? $fields['ticket_date'] : substr($fields['ticket_datetime'], 0, 10),
                     $fields['ticket_datetime'] !== '' ? $fields['ticket_datetime'] : (
-                        ($fields['ticket_date'] !== '' && $fields['ticket_time'] !== '')
-                            ? $fields['ticket_date'].' '.$fields['ticket_time']
+                        $fields['ticket_date'] !== ''
+                            ? $fields['ticket_date'].' '.($fields['ticket_time'] !== ''
+                                ? $fields['ticket_time']
+                                : WheelsysTrafficViolationExcelExporter::DEFAULT_TICKET_TIME)
                             : null
                     ),
                 );
@@ -159,7 +161,12 @@ final class IncomingFineLookup
             'vehicle' => $fields['vehicle'] !== '' ? $fields['vehicle'] : null,
             'reference' => $fields['reference'] !== '' ? $fields['reference'] : null,
             'ticket_date' => $fields['ticket_date'] !== '' ? $fields['ticket_date'] : null,
-            'ticket_time' => $fields['ticket_time'] !== '' ? $fields['ticket_time'] : null,
+            // Wheelsys needs a time; default 09:00 when notice has date only (e.g. Julianus).
+            'ticket_time' => $fields['ticket_time'] !== ''
+                ? $fields['ticket_time']
+                : ($fields['ticket_date'] !== ''
+                    ? WheelsysTrafficViolationExcelExporter::DEFAULT_TICKET_TIME
+                    : null),
             'agr_no' => $rental['agr_no'] ?? null,
             'rental_id' => isset($rental['id']) ? (int) $rental['id'] : null,
             'driver_name' => $wheelsys['driver'] ?? null,
@@ -178,6 +185,7 @@ final class IncomingFineLookup
                     ['key' => 'lookup', 'ok' => $found, 'detail' => $detail],
                 ],
                 'fields' => $fields,
+                'wheelsys' => is_array($wheelsys) ? $wheelsys : null,
                 'rental_count' => count($rentals),
             ],
         ])->save();

@@ -25,7 +25,7 @@ class UnpaidFineResource extends Resource
 
     protected static ?string $navigationLabel = 'Unpaid';
 
-    protected static ?string $navigationGroup = 'Fines';
+    protected static ?string $navigationGroup = 'Tools';
 
     protected static ?string $slug = 'unpaid';
 
@@ -33,7 +33,7 @@ class UnpaidFineResource extends Resource
 
     protected static ?string $pluralModelLabel = 'unpaid fines';
 
-    protected static ?int $navigationSort = 70;
+    protected static ?int $navigationSort = 50;
 
     public static function form(Form $form): Form
     {

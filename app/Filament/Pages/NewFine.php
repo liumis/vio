@@ -7,6 +7,7 @@ use App\Models\FineProcessLog;
 use App\Support\ActivityLogger;
 use App\Support\IncomingFineDocumentArchiver;
 use App\Support\MicrosoftGraphSharePoint;
+use App\Support\WheelsysTrafficViolationExcelExporter;
 use Filament\Forms;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
@@ -29,14 +30,13 @@ class NewFine extends Page implements HasForms
 
     protected static ?string $navigationLabel = 'New manual fine';
 
-    protected static ?string $navigationGroup = 'Fines';
+    protected static ?string $navigationGroup = 'Tools';
 
     protected static ?string $title = 'New manual fine';
 
     protected static ?string $slug = 'new-fine';
 
-    /** Directly under Manual search, after Unpaid (CTA button pair). */
-    protected static ?int $navigationSort = 72;
+    protected static ?int $navigationSort = 20;
 
     protected static string $view = 'filament.pages.new-fine';
 
@@ -171,6 +171,9 @@ class NewFine extends Page implements HasForms
         $driver = trim((string) ($state['driver_name'] ?? ''));
         $ticketDate = $state['ticket_date'] ?? null;
         $ticketTime = trim((string) ($state['ticket_time'] ?? ''));
+        if ($ticketTime === '') {
+            $ticketTime = WheelsysTrafficViolationExcelExporter::DEFAULT_TICKET_TIME;
+        }
         $receivedDate = $state['received_at'] ?? null;
         $authorityId = $state['authority_id'] ?? null;
         $authorityName = trim((string) ($state['authority_name'] ?? ''));

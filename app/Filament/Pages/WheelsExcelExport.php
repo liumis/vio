@@ -18,13 +18,13 @@ class WheelsExcelExport extends Page
 {
     protected static ?string $navigationIcon = 'heroicon-o-arrow-up-tray';
 
-    protected static ?string $navigationLabel = 'Wheelsys import';
+    protected static ?string $navigationLabel = '2. Wheelsys import';
 
     protected static ?string $navigationGroup = 'Fines';
 
     protected static ?string $title = 'Wheelsys import';
 
-    protected static ?int $navigationSort = 20;
+    protected static ?int $navigationSort = 2;
 
     protected static string $view = 'filament.pages.wheels-excel-export';
 
@@ -385,12 +385,13 @@ class WheelsExcelExport extends Page
     {
         $ids = [];
         foreach ($this->logGroups as $group) {
-            if (($group['key'] ?? '') !== $key) {
+            if ((string) ($group['key'] ?? '') !== $key) {
                 continue;
             }
             foreach ($group['logs'] as $log) {
                 if ($this->rowIsSelectable($log)) {
-                    $ids[] = (int) $log->id;
+                    // Strings so wire:model checkbox values match.
+                    $ids[] = (string) $log->id;
                 }
             }
         }
@@ -402,12 +403,17 @@ class WheelsExcelExport extends Page
         }
 
         $this->selectedIds = array_values(array_unique(array_merge(
-            array_map('intval', $this->selectedIds),
+            array_map('strval', $this->selectedIds),
             $ids
         )));
         if (! $this->isBatchOpen($key)) {
             $this->openBatches[] = $key;
         }
+
+        Notification::make()
+            ->success()
+            ->title('Selected '.count($ids).' ready fine(s)')
+            ->send();
     }
 
     /**
@@ -463,10 +469,10 @@ class WheelsExcelExport extends Page
         $all = [];
         foreach ($this->logs as $log) {
             if ($this->rowIsSelectable($log)) {
-                $all[] = (int) $log->id;
+                $all[] = (string) $log->id;
             }
         }
-        $selected = array_values(array_map('intval', $this->selectedIds));
+        $selected = array_values(array_map('strval', $this->selectedIds));
         sort($selected);
         $sortedAll = $all;
         sort($sortedAll);

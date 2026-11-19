@@ -25,6 +25,9 @@ use Throwable;
  */
 final class WheelsysTrafficViolationExcelExporter
 {
+    /** Wheelsys import requires Ticket Time; used when source has date only (e.g. Julianus). */
+    public const DEFAULT_TICKET_TIME = '09:00';
+
     /**
      * @var list<string>
      */
@@ -302,6 +305,9 @@ final class WheelsysTrafficViolationExcelExporter
      */
     public function mapLog(FineProcessLog $log): array
     {
+        $this->rehydrateTicketTimeFromAttachments($log);
+        $this->ensureDefaultTicketTime($log);
+
         $ticketDate = $log->ticket_date
             ? $log->ticket_date->copy()->startOfDay()
             : null;
@@ -399,12 +405,9 @@ final class WheelsysTrafficViolationExcelExporter
     private function parseTicketTime(mixed $raw, ?CarbonInterface $ticketDate): ?CarbonInterface
     {
         $ticketTime = trim((string) ($raw ?? ''));
-        if ($ticketTime === '') {
-            return null;
-        }
-
-        if (! preg_match('/^(\d{1,2}):(\d{2})(?::(\d{2}))?/', $ticketTime, $m)) {
-            return null;
+        if ($ticketTime === '' || ! preg_match('/^(\d{1,2}):(\d{2})(?::(\d{2}))?/', $ticketTime, $m)) {
+            $ticketTime = self::DEFAULT_TICKET_TIME;
+            preg_match('/^(\d{1,2}):(\d{2})(?::(\d{2}))?/', $ticketTime, $m);
         }
 
         $base = $ticketDate
@@ -412,5 +415,79 @@ final class WheelsysTrafficViolationExcelExporter
             : Carbon::today(config('app.timezone'))->startOfDay();
 
         return $base->setTime((int) $m[1], (int) $m[2], isset($m[3]) ? (int) $m[3] : 0);
+    }
+
+    /**
+     * Persist 09:00 when date exists but time was never extracted (Julianus etc.).
+     */
+    private function ensureDefaultTicketTime(FineProcessLog $log): void
+    {
+        if (filled($log->ticket_time) || ! $log->ticket_date) {
+            return;
+        }
+
+        $log->ticket_time = self::DEFAULT_TICKET_TIME;
+        $log->save();
+    }
+
+    /**
+     * Older lookups missed Judu "Laikas … HH:MM" etc. Re-read saved extracts once.
+     */
+    private function rehydrateTicketTimeFromAttachments(FineProcessLog $log): void
+    {
+        if (filled($log->ticket_time)) {
+            return;
+        }
+
+        $dir = trim((string) ($log->local_attachment_dir ?? ''));
+        if ($dir === '') {
+            return;
+        }
+
+        $resolved = null;
+        foreach ([
+            $dir,
+            storage_path('app/'.$dir),
+            storage_path('app/private/'.$dir),
+        ] as $cand) {
+            if (is_dir($cand)) {
+                $resolved = $cand;
+                break;
+            }
+        }
+        if ($resolved === null) {
+            return;
+        }
+
+        $haystack = '';
+        foreach (glob($resolved.DIRECTORY_SEPARATOR.'*.extract.txt') ?: [] as $txt) {
+            $haystack .= "\n".(string) @file_get_contents($txt);
+        }
+        if (trim($haystack) === '') {
+            foreach (scandir($resolved) ?: [] as $file) {
+                if (! preg_match('/\.pdf$/i', $file)) {
+                    continue;
+                }
+                try {
+                    $haystack .= "\n".(new \Smalot\PdfParser\Parser)
+                        ->parseFile($resolved.DIRECTORY_SEPARATOR.$file)
+                        ->getText();
+                } catch (Throwable) {
+                    // OCR-only PDFs may have no text layer.
+                }
+            }
+        }
+        if (trim($haystack) === '') {
+            return;
+        }
+
+        $time = app(IncomingFineReplyBuilder::class)
+            ->extractTicketTime((string) ($log->subject ?? ''), $haystack);
+        if ($time === '') {
+            return;
+        }
+
+        $log->ticket_time = $time;
+        $log->save();
     }
 }

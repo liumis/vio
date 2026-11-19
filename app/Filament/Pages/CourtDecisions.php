@@ -30,13 +30,13 @@ class CourtDecisions extends Page implements HasForms
 
     protected static ?string $navigationLabel = 'Court decisions';
 
-    protected static ?string $navigationGroup = 'Fines';
+    protected static ?string $navigationGroup = 'Tools';
 
     protected static ?string $title = 'Teismo nutarimai (manual)';
 
     protected static ?string $slug = 'court-decisions';
 
-    protected static ?int $navigationSort = 50;
+    protected static ?int $navigationSort = 40;
 
     protected static string $view = 'filament.pages.court-decisions';
 

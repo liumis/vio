@@ -17,13 +17,13 @@ class EpaslaugosFollowUp extends Page
 
     protected static ?string $navigationLabel = 'ePaslaugos Atmesti';
 
-    protected static ?string $navigationGroup = 'Fines';
+    protected static ?string $navigationGroup = 'Tools';
 
     protected static ?string $title = 'ePaslaugos · Atmesti follow-up';
 
     protected static ?string $slug = 'epaslaugos-atmesti';
 
-    protected static ?int $navigationSort = 40;
+    protected static ?int $navigationSort = 30;
 
     protected static string $view = 'filament.pages.epaslaugos-follow-up';
 

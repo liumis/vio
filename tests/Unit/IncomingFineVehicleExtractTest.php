@@ -49,4 +49,23 @@ class IncomingFineVehicleExtractTest extends TestCase
         $text = "Transportlīdzekļa reģistrācijas Nr.: MAB841\nLēmums PZ00160267";
         $this->assertSame('MAB841', $this->builder->extractVehicle('Vēstule', $text));
     }
+
+    public function test_extracts_judu_laikas_time(): void
+    {
+        $text = "Laikas 2026-11-18 13:55\nPranešimo Nr.A1428780\nValstybinis Nr.EF9367\nSumokėti iki 2026-11-25 23:59";
+        $this->assertSame('2026-11-18', $this->builder->extractTicketDate('JUDU', $text));
+        $this->assertSame('13:55', $this->builder->extractTicketTime('JUDU', $text));
+    }
+
+    public function test_extracts_julianus_iso_time(): void
+    {
+        $text = 'PAŽEIDIMO FIKSAVIMO DATA - KIA MRH986;2026-08-15T11:12:55';
+        $this->assertSame('11:12', $this->builder->extractTicketTime('Julianus', $text));
+    }
+
+    public function test_extracts_camera_filename_time(): void
+    {
+        $text = '20260906143426188-ID_cam-NTH054_B.jpeg';
+        $this->assertSame('14:34', $this->builder->extractTicketTime('x', $text));
+    }
 }

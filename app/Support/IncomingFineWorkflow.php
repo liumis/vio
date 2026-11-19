@@ -222,7 +222,11 @@ final class IncomingFineWorkflow
             'vehicle' => $fields['vehicle'] !== '' ? $fields['vehicle'] : null,
             'reference' => $fields['reference'] !== '' ? $fields['reference'] : null,
             'ticket_date' => $fields['ticket_date'] !== '' ? $fields['ticket_date'] : null,
-            'ticket_time' => $fields['ticket_time'] !== '' ? $fields['ticket_time'] : null,
+            'ticket_time' => $fields['ticket_time'] !== ''
+                ? $fields['ticket_time']
+                : ($fields['ticket_date'] !== ''
+                    ? WheelsysTrafficViolationExcelExporter::DEFAULT_TICKET_TIME
+                    : null),
             'agr_no' => $rental['agr_no'] ?? null,
             'rental_id' => isset($rental['id']) ? (int) $rental['id'] : null,
             'driver_name' => $wheelsys['driver'] ?? null,
@@ -230,6 +234,7 @@ final class IncomingFineWorkflow
             'workflow' => [
                 'steps' => $steps,
                 'fields' => $fields,
+                'wheelsys' => is_array($wheelsys) ? $wheelsys : null,
                 'rental_count' => count($rentals),
             ],
             // Do not overwrite an already-exported row if Process is re-run on same graph id

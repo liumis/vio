@@ -313,6 +313,25 @@ final class IncomingFineReplyBuilder
             return sprintf('%02d:%02d', (int) $m[1], (int) $m[2]);
         }
 
+        // Judu / parking mail: "Laikas 2026-11-18 13:55" (not "Sumokėti iki …").
+        if (preg_match(
+            '/\bLaikas\s+20\d{2}[.\-\/]\d{2}[.\-\/]\d{2}\s+([01]?\d|2[0-3]):([0-5]\d)\b/iu',
+            $haystack,
+            $m
+        )) {
+            return sprintf('%02d:%02d', (int) $m[1], (int) $m[2]);
+        }
+
+        // Julianus / camera: "KIA MRH986;2026-08-15T11:12:55"
+        if (preg_match('/\b20\d{2}[.\-\/]\d{2}[.\-\/]\d{2}T([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?\b/', $haystack, $m)) {
+            return sprintf('%02d:%02d', (int) $m[1], (int) $m[2]);
+        }
+
+        // Julianus camera filenames: 20260906143426188-ID_… → 14:34
+        if (preg_match('/\b20\d{2}\d{2}\d{2}([01]\d|2[0-3])([0-5]\d)[0-5]\d\d{0,6}[-_]/u', $haystack, $m)) {
+            return sprintf('%02d:%02d', (int) $m[1], (int) $m[2]);
+        }
+
         // "03/09/2026 at 16:42 traffic offence was committed"
         if (preg_match(
             '/\b(\d{2})\/(\d{2})\/(20\d{2})\s+at\s+([01]?\d|2[0-3]):([0-5]\d)\b.{0,40}(?:traffic\s+)?offence/iu',
@@ -582,6 +601,18 @@ final class IncomingFineReplyBuilder
 
         // VMI table row: "2026-10-06 26313998465" (decision date + ROIK).
         if (preg_match('/\b(20\d{2})-(\d{2})-(\d{2})\s+26\d{9}\b/', $haystack, $m)) {
+            $iso = $m[1].'-'.$m[2].'-'.$m[3];
+            if ($this->isPlausibleTicketDate($iso)) {
+                return $iso;
+            }
+        }
+
+        // Judu: "Laikas 2026-11-18 13:55"
+        if (preg_match(
+            '/\bLaikas\s+(20\d{2})[.\-\/](\d{2})[.\-\/](\d{2})\s+[01]?\d:[0-5]\d\b/iu',
+            $haystack,
+            $m
+        )) {
             $iso = $m[1].'-'.$m[2].'-'.$m[3];
             if ($this->isPlausibleTicketDate($iso)) {
                 return $iso;
