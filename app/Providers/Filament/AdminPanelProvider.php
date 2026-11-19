@@ -71,32 +71,25 @@ class AdminPanelProvider extends PanelProvider
     }
 
     /* Manual search + New manual fine — light gray button style in the sidebar. */
-    .fi-sidebar-nav a[href$="/wheelsys-manual-search"],
-    .fi-sidebar-nav a[href*="/wheelsys-manual-search?"],
-    .fi-sidebar-nav a[href$="/new-fine"],
-    .fi-sidebar-nav a[href*="/new-fine?"] {
+    .fi-sidebar-nav a[href*="wheelsys-manual-search"],
+    .fi-sidebar-nav a[href*="new-fine"] {
         margin-top: 0.35rem !important;
         border-radius: 0.65rem !important;
         background: #eef2f6 !important;
         color: #223a4e !important;
         font-weight: 600 !important;
         box-shadow: none !important;
+        padding-inline: 0.65rem !important;
     }
-    .fi-sidebar-nav a[href$="/wheelsys-manual-search"]:hover,
-    .fi-sidebar-nav a[href*="/wheelsys-manual-search?"]:hover,
-    .fi-sidebar-nav a[href$="/new-fine"]:hover,
-    .fi-sidebar-nav a[href*="/new-fine?"]:hover {
+    .fi-sidebar-nav a[href*="wheelsys-manual-search"]:hover,
+    .fi-sidebar-nav a[href*="new-fine"]:hover {
         background: #e2e8f0 !important;
         color: #1a2d3d !important;
     }
-    .fi-sidebar-nav a[href$="/wheelsys-manual-search"] .fi-sidebar-item-label,
-    .fi-sidebar-nav a[href*="/wheelsys-manual-search?"] .fi-sidebar-item-label,
-    .fi-sidebar-nav a[href$="/new-fine"] .fi-sidebar-item-label,
-    .fi-sidebar-nav a[href*="/new-fine?"] .fi-sidebar-item-label,
-    .fi-sidebar-nav a[href$="/wheelsys-manual-search"] svg,
-    .fi-sidebar-nav a[href*="/wheelsys-manual-search?"] svg,
-    .fi-sidebar-nav a[href$="/new-fine"] svg,
-    .fi-sidebar-nav a[href*="/new-fine?"] svg {
+    .fi-sidebar-nav a[href*="wheelsys-manual-search"] .fi-sidebar-item-label,
+    .fi-sidebar-nav a[href*="new-fine"] .fi-sidebar-item-label,
+    .fi-sidebar-nav a[href*="wheelsys-manual-search"] svg,
+    .fi-sidebar-nav a[href*="new-fine"] svg {
         color: #223a4e !important;
     }
 

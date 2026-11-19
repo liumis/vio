@@ -22,7 +22,7 @@ class CloudDeploy extends Command
 
     public function handle(): int
     {
-        $this->info('1/2 migrate --force');
+        $this->info('1/3 migrate --force');
         $migrate = Artisan::call('migrate', ['--force' => true]);
         $this->output->write(Artisan::output());
         if ($migrate !== self::SUCCESS) {
@@ -31,11 +31,16 @@ class CloudDeploy extends Command
             return $migrate;
         }
 
-        $this->info('2/2 ProductionBootstrapSeeder (users + settings + authorities)');
+        $this->info('2/3 ProductionBootstrapSeeder (users + settings + authorities)');
         $this->call('db:seed', [
             '--class' => ProductionBootstrapSeeder::class,
             '--force' => true,
         ]);
+
+        // Views/config/routes often stay stale on Cloud without this.
+        $this->info('3/3 optimize:clear');
+        Artisan::call('optimize:clear');
+        $this->output->write(Artisan::output());
 
         $this->newLine();
         $this->table(
