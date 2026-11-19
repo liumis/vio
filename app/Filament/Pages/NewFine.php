@@ -35,8 +35,8 @@ class NewFine extends Page implements HasForms
 
     protected static ?string $slug = 'new-fine';
 
-    /** Directly under Manual search (CTA button pair). */
-    protected static ?int $navigationSort = 31;
+    /** Directly under Manual search, after Unpaid (CTA button pair). */
+    protected static ?int $navigationSort = 72;
 
     protected static string $view = 'filament.pages.new-fine';
 
