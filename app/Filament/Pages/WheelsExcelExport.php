@@ -24,7 +24,7 @@ class WheelsExcelExport extends Page
 
     protected static ?string $title = 'Wheelsys import';
 
-    protected static ?int $navigationSort = 3;
+    protected static ?int $navigationSort = 20;
 
     protected static string $view = 'filament.pages.wheels-excel-export';
 

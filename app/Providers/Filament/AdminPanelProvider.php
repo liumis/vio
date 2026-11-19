@@ -70,26 +70,31 @@ class AdminPanelProvider extends PanelProvider
         padding-inline: 0 !important;
     }
 
-    /* Manual search + New manual fine — light gray button style in the sidebar. */
-    .fi-sidebar-nav a[href*="wheelsys-manual-search"],
-    .fi-sidebar-nav a[href*="new-fine"] {
-        margin-top: 0.35rem !important;
-        border-radius: 0.65rem !important;
-        background: #eef2f6 !important;
-        color: #223a4e !important;
-        font-weight: 600 !important;
-        box-shadow: none !important;
-        padding-inline: 0.65rem !important;
+    /* Manual search + New manual fine — clear CTA buttons (pair under each other). */
+    .fi-sidebar-item:has(> a.fi-sidebar-item-button[href*="wheelsys-manual-search"]) {
+        margin-top: 0.85rem !important;
     }
-    .fi-sidebar-nav a[href*="wheelsys-manual-search"]:hover,
-    .fi-sidebar-nav a[href*="new-fine"]:hover {
-        background: #e2e8f0 !important;
+    a.fi-sidebar-item-button[href*="wheelsys-manual-search"],
+    a.fi-sidebar-item-button[href*="/new-fine"] {
+        border-radius: 0.65rem !important;
+        background: #e8eef3 !important;
+        border: 1px solid #cbd5e1 !important;
+        color: #223a4e !important;
+        font-weight: 650 !important;
+        box-shadow: none !important;
+        padding-inline: 0.7rem !important;
+        margin-top: 0.2rem !important;
+    }
+    a.fi-sidebar-item-button[href*="wheelsys-manual-search"]:hover,
+    a.fi-sidebar-item-button[href*="/new-fine"]:hover {
+        background: #dbe4ec !important;
+        border-color: #94a3b8 !important;
         color: #1a2d3d !important;
     }
-    .fi-sidebar-nav a[href*="wheelsys-manual-search"] .fi-sidebar-item-label,
-    .fi-sidebar-nav a[href*="new-fine"] .fi-sidebar-item-label,
-    .fi-sidebar-nav a[href*="wheelsys-manual-search"] svg,
-    .fi-sidebar-nav a[href*="new-fine"] svg {
+    a.fi-sidebar-item-button[href*="wheelsys-manual-search"] .fi-sidebar-item-label,
+    a.fi-sidebar-item-button[href*="/new-fine"] .fi-sidebar-item-label,
+    a.fi-sidebar-item-button[href*="wheelsys-manual-search"] .fi-sidebar-item-icon,
+    a.fi-sidebar-item-button[href*="/new-fine"] .fi-sidebar-item-icon {
         color: #223a4e !important;
     }
 

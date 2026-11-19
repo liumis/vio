@@ -40,7 +40,7 @@ class IncomingFines extends Page implements HasForms
 
     protected static ?string $title = 'New fines';
 
-    protected static ?int $navigationSort = 1;
+    protected static ?int $navigationSort = 10;
 
     protected static string $view = 'filament.pages.incoming-fines';
 

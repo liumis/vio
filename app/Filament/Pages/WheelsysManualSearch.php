@@ -24,7 +24,7 @@ class WheelsysManualSearch extends Page implements HasForms
 
     protected static ?string $title = 'Manual search';
 
-    protected static ?int $navigationSort = 4;
+    protected static ?int $navigationSort = 30;
 
     protected static string $view = 'filament.pages.wheelsys-manual-search';
 

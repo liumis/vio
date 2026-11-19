@@ -38,7 +38,7 @@ class ViolationResource extends Resource
 
     protected static ?string $pluralModelLabel = 'imported fines';
 
-    protected static ?int $navigationSort = 8;
+    protected static ?int $navigationSort = 60;
 
     public static function form(Form $form): Form
     {
