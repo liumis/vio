@@ -204,32 +204,86 @@ final class WheelsysClient
     }
 
     /**
-     * Rentals whose check-out/check-in window covers the offense date (Y-m-d).
+     * Rentals whose check-out/check-in window covers the offense moment.
+     * Prefer ticketDateTime (date+time); fall back to ticketDate (day-level).
      *
      * @return list<array<string, mixed>>
      */
-    public function findRentalsCoveringDate(string $vehicle, string $ticketDate): array
+    public function findRentalsCoveringDate(string $vehicle, string $ticketDate, ?string $ticketDateTime = null): array
     {
-        $wanted = substr(trim($ticketDate), 0, 10);
-        if ($wanted === '' || ! preg_match('/^\d{4}-\d{2}-\d{2}$/', $wanted)) {
+        $rawMoment = trim((string) ($ticketDateTime ?: $ticketDate));
+        $wanted = $this->parseDateTime($rawMoment);
+        if ($wanted === null) {
             return [];
         }
+        $precise = $this->hasTimeComponent($rawMoment);
 
         return array_values(array_filter(
             $this->searchRentalsByVehicle($vehicle),
-            function (array $row) use ($wanted): bool {
-                $from = substr((string) ($row['date_from'] ?? ''), 0, 10);
-                $to = substr((string) ($row['date_to'] ?? ''), 0, 10);
-                if ($from === '') {
+            function (array $row) use ($wanted, $precise): bool {
+                $from = $this->parseDateTime($row['date_from'] ?? null);
+                if ($from === null) {
                     return false;
                 }
-                if ($to === '') {
-                    return $wanted >= $from;
+                $to = $this->parseDateTime($row['date_to'] ?? null);
+
+                if (! $precise) {
+                    $wantedDay = $wanted->toDateString();
+                    $fromDay = $from->toDateString();
+                    if ($to === null) {
+                        return $wantedDay >= $fromDay;
+                    }
+
+                    return $wantedDay >= $fromDay && $wantedDay <= $to->toDateString();
                 }
 
-                return $wanted >= $from && $wanted <= $to;
+                if ($to === null) {
+                    return $wanted->greaterThanOrEqualTo($from);
+                }
+
+                return $wanted->greaterThanOrEqualTo($from) && $wanted->lessThanOrEqualTo($to);
             }
         ));
+    }
+
+    /**
+     * Human label for rental / ticket moments: "2026-10-28 07:30".
+     */
+    public static function formatDateTimeLabel(mixed $value): string
+    {
+        $raw = trim((string) $value);
+        if ($raw === '') {
+            return '';
+        }
+
+        try {
+            $dt = \Illuminate\Support\Carbon::parse($raw);
+        } catch (\Throwable) {
+            return $raw;
+        }
+
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw)) {
+            return $dt->format('Y-m-d');
+        }
+
+        return $dt->format('Y-m-d H:i');
+    }
+
+    /**
+     * @return non-empty-string|null
+     */
+    public static function formatRentalWindow(mixed $from, mixed $to): ?string
+    {
+        $fromLabel = self::formatDateTimeLabel($from);
+        $toLabel = self::formatDateTimeLabel($to);
+        if ($fromLabel === '' && $toLabel === '') {
+            return null;
+        }
+        if ($fromLabel !== '' && $toLabel !== '') {
+            return $fromLabel.' → '.$toLabel;
+        }
+
+        return $fromLabel !== '' ? $fromLabel : $toLabel;
     }
 
     /**
@@ -520,6 +574,11 @@ final class WheelsysClient
             'ticket_type' => $row['TicketType_Name'] ?? null,
             'charge' => $row['TicketFee'] ?? null,
             'admin_fee' => $row['AdminFee'] ?? null,
+            // Traffic Violation lifecycle in Wheelsys (numeric State + PAIDDATE).
+            'state' => isset($row['State']) ? (string) $row['State'] : null,
+            'paid_date' => $this->dateOnly($row['PAIDDATE'] ?? null),
+            'remaining_balance' => $row['RemainingBalance'] ?? null,
+            'total_paid_amount' => $row['TotalPaidAmount'] ?? null,
             'raw' => $row,
         ];
     }
@@ -570,6 +629,31 @@ final class WheelsysClient
         }
 
         return substr((string) $value, 0, 10);
+    }
+
+    private function hasTimeComponent(string $value): bool
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return false;
+        }
+
+        return (bool) preg_match('/\d{1,2}:\d{2}/', $value);
+    }
+
+    private function parseDateTime(mixed $value): ?\Illuminate\Support\Carbon
+    {
+        $raw = trim((string) $value);
+        if ($raw === '') {
+            return null;
+        }
+
+        try {
+            // Contracts / offense times are minute-precision — ignore seconds.
+            return \Illuminate\Support\Carbon::parse($raw)->startOfMinute();
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     private function baseUrl(): string

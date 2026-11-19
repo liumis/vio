@@ -57,6 +57,41 @@
             -webkit-backdrop-filter: blur(10px);
             backdrop-filter: blur(10px);
         }
+        .vio-acc {
+            border-radius: 14px; background: #fff; border: 1px solid #e2e8f0;
+            box-shadow: 0 8px 24px rgba(34,58,78,.05); overflow: hidden;
+        }
+        .vio-acc + .vio-acc { margin-top: 12px; }
+        .vio-acc-new { border-color: #86efac; box-shadow: 0 8px 24px rgba(46,204,113,.08); }
+        .vio-acc-head {
+            width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
+            padding: 14px 16px; background: #f8fafc; border: 0; cursor: pointer;
+        }
+        .vio-acc-new .vio-acc-head { background: #ecfdf5; }
+        .vio-acc-head:hover { background: #f1f5f9; }
+        .vio-acc-new .vio-acc-head:hover { background: #d1fae5; }
+        .vio-acc-chevron {
+            width: 1.1rem; height: 1.1rem; color: #64748b; flex-shrink: 0;
+            transition: transform .15s ease;
+        }
+        .vio-acc-open .vio-acc-chevron { transform: rotate(90deg); }
+        .vio-acc-title { font-size: 13px; font-weight: 700; color: #0f172a; }
+        .vio-acc-sub { font-size: 11px; color: #64748b; margin-top: 2px; }
+        .vio-acc-count {
+            margin-left: auto; font-size: 11px; font-weight: 700; color: #475569;
+            background: #e2e8f0; border-radius: 999px; padding: 2px 9px;
+        }
+        .vio-acc-new .vio-acc-count { background: #bbf7d0; color: #166534; }
+        .vio-acc-status {
+            flex-shrink: 0; font-size: 11px; font-weight: 700; border-radius: 999px;
+            padding: 2px 9px; line-height: 1.35; white-space: nowrap;
+        }
+        .vio-acc-status-imported { background: #ecfdf5; color: #047857; border: 1px solid #86efac; }
+        .vio-acc-status-not_imported { background: #fffbeb; color: #b45309; border: 1px solid #fbbf24; }
+        .vio-acc-status-partial { background: #f0f9ff; color: #0369a1; border: 1px solid #7dd3fc; }
+        .vio-acc-status-new { background: #f1f5f9; color: #475569; }
+        .vio-acc-body { border-top: 1px solid #e2e8f0; }
+        .vio-acc-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 16px; background: #fff; border-bottom: 1px solid #f1f5f9; }
     </style>
 
     <div class="vio-import-hero">
@@ -137,102 +172,150 @@
             Nothing here yet. On <strong>New fines</strong> use Fetch + Find driver first.
         </p>
     @else
-        <div class="overflow-x-auto overflow-y-visible rounded-xl bg-white ring-1 ring-slate-200" style="margin-bottom: 5.5rem; box-shadow: 0 8px 24px rgba(34,58,78,.06);">
-            <table class="vio-fines-table w-full min-w-[980px] text-left">
-                <thead>
-                    <tr>
-                        <th style="width: 2.5rem;"></th>
-                        <th>Received</th>
-                        <th>Vehicle</th>
-                        <th>Driver</th>
-                        <th>Reference</th>
-                        <th>Authority</th>
-                        <th>Informavimas</th>
-                        <th>Status</th>
-                        <th>Import file</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach ($this->logs as $log)
-                        @php
-                            $selectable = $this->rowIsSelectable($log);
-                            $status = $this->rowStatusLabel($log);
-                            $fileLabel = $log->wheels_export_file_name
-                                ?: ($log->wheels_export_batch ? 'wheels-export-'.$log->wheels_export_batch.'.xlsx' : null);
-                        @endphp
-                        <tr
-                            wire:key="import-{{ $log->id }}"
-                            @class(['vio-row-inactive' => ! $selectable])
-                        >
-                            <td>
-                                <input
-                                    type="checkbox"
-                                    value="{{ $log->id }}"
-                                    wire:model.live="selectedIds"
-                                    class="rounded border-slate-300"
-                                    @disabled(! $selectable && $log->wheels_import_status === \App\Models\FineProcessLog::WHEELS_IMPORT_IMPORTED)
-                                />
-                            </td>
-                            <td style="min-width: 8rem;">
-                                <div style="font-size: 11px; color: #64748b; font-variant-numeric: tabular-nums;">
-                                    {{ optional($log->received_at)->timezone(config('app.timezone'))?->format('Y-m-d H:i') ?? '—' }}
-                                </div>
-                            </td>
-                            <td>
-                                <div style="font-weight: 700; letter-spacing: .02em;">{{ $log->vehicle ?: '—' }}</div>
-                                @if ($log->ticket_date)
-                                    <div style="margin-top: 2px; font-size: 11px; color: #64748b;">
-                                        {{ $log->ticket_date->format('Y-m-d') }}
-                                        @if ($log->ticket_time) {{ $log->ticket_time }} @endif
-                                    </div>
-                                @endif
-                            </td>
-                            <td>{{ $log->driver_name ?: '—' }}</td>
-                            <td>{{ $log->reference ?: '—' }}</td>
-                            <td>
-                                @if ($log->authority_name)
-                                    <span class="vio-chip vio-chip-ok">{{ $log->authority_name }}</span>
+        <div style="margin-bottom: 5.5rem;">
+            @foreach ($this->logGroups as $group)
+                @php
+                    $groupKey = (string) $group['key'];
+                    $isOpen = $this->isBatchOpen($groupKey);
+                    $groupLogs = $group['logs'];
+                @endphp
+                <div
+                    wire:key="acc-{{ $groupKey }}"
+                    @class(['vio-acc', 'vio-acc-new' => ! empty($group['is_new']), 'vio-acc-open' => $isOpen])
+                >
+                    <button
+                        type="button"
+                        class="vio-acc-head"
+                        wire:click="toggleBatch(@js($groupKey))"
+                    >
+                        <svg class="vio-acc-chevron" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z" clip-rule="evenodd" />
+                        </svg>
+                        <div class="min-w-0">
+                            <div class="vio-acc-title truncate">{{ $group['title'] }}</div>
+                            @if (! empty($group['subtitle']))
+                                <div class="vio-acc-sub truncate">{{ $group['subtitle'] }}</div>
+                            @endif
+                        </div>
+                        @if (! empty($group['import_label']))
+                            <span class="vio-acc-status vio-acc-status-{{ $group['import_status'] ?? 'not_imported' }}">
+                                {{ $group['import_label'] }}
+                            </span>
+                        @endif
+                        <span class="vio-acc-count">{{ count($groupLogs) }}</span>
+                    </button>
+
+                    @if ($isOpen)
+                        <div class="vio-acc-body">
+                            <div class="vio-acc-actions">
+                                @if (! empty($group['is_new']))
+                                    <x-filament::button size="xs" color="success" wire:click="selectGroup(@js($groupKey))">
+                                        Select all ready
+                                    </x-filament::button>
                                 @else
-                                    <span style="color: #cbd5e1;">—</span>
-                                @endif
-                            </td>
-                            <td>
-                                @include('filament.partials.informavimo-badge', [
-                                    'deadline' => \App\Support\InformavimoTerminas::forLog($log),
-                                ])
-                            </td>
-                            <td>
-                                @if ($status === 'Ready')
-                                    <span class="vio-chip vio-chip-slate">Ready</span>
-                                @elseif ($status === 'In Wheels')
-                                    <span class="vio-chip vio-chip-ok">In Wheels</span>
-                                @elseif ($status === 'Missing in Wheels')
-                                    <span class="vio-chip vio-chip-warn">Missing</span>
-                                @else
-                                    <span class="vio-chip vio-chip-sky">In import file</span>
-                                @endif
-                            </td>
-                            <td>
-                                @if ($fileLabel)
-                                    @if ($log->wheels_export_sharepoint_url)
-                                        <a
-                                            href="{{ $log->wheels_export_sharepoint_url }}"
+                                    @if (! empty($group['sharepoint_url']))
+                                        <x-filament::button
+                                            tag="a"
+                                            size="xs"
+                                            color="gray"
+                                            :href="$group['sharepoint_url']"
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            class="text-xs font-medium text-sky-700 hover:underline"
-                                            title="{{ $fileLabel }}"
-                                        >{{ \Illuminate\Support\Str::limit($fileLabel, 28) }}</a>
-                                    @else
-                                        <span class="font-mono text-xs text-slate-600">{{ \Illuminate\Support\Str::limit($fileLabel, 28) }}</span>
+                                        >
+                                            Open file
+                                        </x-filament::button>
                                     @endif
-                                @else
-                                    <span style="color: #cbd5e1;">—</span>
+                                    <x-filament::button size="xs" color="gray" wire:click="selectGroup(@js($groupKey))">
+                                        Select ready in file
+                                    </x-filament::button>
                                 @endif
-                            </td>
-                        </tr>
-                    @endforeach
-                </tbody>
-            </table>
+                            </div>
+
+                            @if ($groupLogs === [])
+                                <p class="text-sm text-slate-500" style="margin: 0; padding: 16px;">No fines in this group.</p>
+                            @else
+                                <div class="overflow-x-auto">
+                                    <table class="vio-fines-table w-full min-w-[900px] text-left">
+                                        <thead>
+                                            <tr>
+                                                <th style="width: 2.5rem;"></th>
+                                                <th>Received</th>
+                                                <th>Vehicle</th>
+                                                <th>Driver</th>
+                                                <th>Reference</th>
+                                                <th>Authority</th>
+                                                <th>Informavimas</th>
+                                                <th>Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach ($groupLogs as $log)
+                                                @php
+                                                    $selectable = $this->rowIsSelectable($log);
+                                                    $status = $this->rowStatusLabel($log);
+                                                @endphp
+                                                <tr
+                                                    wire:key="import-{{ $log->id }}"
+                                                    @class(['vio-row-inactive' => ! $selectable])
+                                                >
+                                                    <td>
+                                                        <input
+                                                            type="checkbox"
+                                                            value="{{ $log->id }}"
+                                                            wire:model.live="selectedIds"
+                                                            class="rounded border-slate-300"
+                                                            @disabled(! $selectable && $log->wheels_import_status === \App\Models\FineProcessLog::WHEELS_IMPORT_IMPORTED)
+                                                        />
+                                                    </td>
+                                                    <td style="min-width: 8rem;">
+                                                        <div style="font-size: 11px; color: #64748b; font-variant-numeric: tabular-nums;">
+                                                            {{ optional($log->received_at)->timezone(config('app.timezone'))?->format('Y-m-d H:i') ?? '—' }}
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <div style="font-weight: 700; letter-spacing: .02em;">{{ $log->vehicle ?: '—' }}</div>
+                                                        @if ($log->ticket_date)
+                                                            <div style="margin-top: 2px; font-size: 11px; color: #64748b;">
+                                                                {{ $log->ticket_date->format('Y-m-d') }}
+                                                                @if ($log->ticket_time) {{ $log->ticket_time }} @endif
+                                                            </div>
+                                                        @endif
+                                                    </td>
+                                                    <td>{{ $log->driver_name ?: '—' }}</td>
+                                                    <td>{{ $log->reference ?: '—' }}</td>
+                                                    <td>
+                                                        @if ($log->authority_name)
+                                                            <span class="vio-chip vio-chip-ok">{{ $log->authority_name }}</span>
+                                                        @else
+                                                            <span style="color: #cbd5e1;">—</span>
+                                                        @endif
+                                                    </td>
+                                                    <td>
+                                                        @include('filament.partials.informavimo-badge', [
+                                                            'deadline' => \App\Support\InformavimoTerminas::forLog($log),
+                                                        ])
+                                                    </td>
+                                                    <td>
+                                                        @if ($status === 'Ready')
+                                                            <span class="vio-chip vio-chip-slate">Ready</span>
+                                                        @elseif ($status === 'In Wheels')
+                                                            <span class="vio-chip vio-chip-ok">In Wheels</span>
+                                                        @elseif ($status === 'Missing in Wheels')
+                                                            <span class="vio-chip vio-chip-warn">Missing</span>
+                                                        @else
+                                                            <span class="vio-chip vio-chip-sky">In import file</span>
+                                                        @endif
+                                                    </td>
+                                                </tr>
+                                            @endforeach
+                                        </tbody>
+                                    </table>
+                                </div>
+                            @endif
+                        </div>
+                    @endif
+                </div>
+            @endforeach
         </div>
 
         <div class="vio-footer-bar fixed inset-x-0 bottom-0">

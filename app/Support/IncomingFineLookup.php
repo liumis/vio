@@ -36,6 +36,12 @@ final class IncomingFineLookup
      */
     public function lookup(array $message, ?int $userId = null): array
     {
+        $subject = (string) ($message['subject'] ?? '');
+        $preview = (string) ($message['preview'] ?? '');
+        if (IncomingFineMailScanner::isNonFineNotice($subject, $preview)) {
+            return $this->skipNonFine($message, $userId, 'Skipped — not a fine notice (annulment / payment / move-car)');
+        }
+
         $extract = ['text' => '', 'files' => [], 'saved_dir' => null];
         try {
             if (! empty($message['has_attachments'])) {
@@ -46,6 +52,7 @@ final class IncomingFineLookup
             $extract['text'] = '';
         }
 
+        $bodyText = '';
         // JUDU / Unipark / Parkavimas mieste: Print email → PDF even when there are no attachments.
         try {
             $emailPrint = app(IncomingFineEmailPrintPdf::class)->ensureLocalPdf(
@@ -54,16 +61,28 @@ final class IncomingFineLookup
             );
             if ($emailPrint !== null) {
                 $extract['saved_dir'] = $emailPrint['saved_dir'];
+                $bodyText = trim((string) ($emailPrint['body_text'] ?? ''));
             }
         } catch (Throwable) {
             // Non-fatal during Find driver.
         }
 
+        $haystackBuilder = app(IncomingFineTextHaystack::class);
+        if ($bodyText === '') {
+            $bodyText = $haystackBuilder->fetchBodyText($message);
+        }
+
+        $message['body_text'] = $bodyText;
         $message['attachment_text'] = (string) ($extract['text'] ?? '');
         $message['attachment_extract'] = $extract;
 
-        $subject = (string) ($message['subject'] ?? '');
-        $haystack = trim((string) ($message['preview'] ?? '')."\n".$message['attachment_text']);
+        // Body may carry annulment text when subject/preview alone do not.
+        if (IncomingFineMailScanner::isNonFineNotice($subject, $preview."\n".$bodyText)) {
+            return $this->skipNonFine($message, $userId, 'Skipped — not a fine notice (annulment / payment / move-car)');
+        }
+
+        $haystack = $haystackBuilder->build($message, $extract, $bodyText);
+        $message['attachment_text'] = $haystack;
         $fields = [
             'reference' => $this->replyBuilder->extractReference($subject, $haystack),
             'vehicle' => $this->replyBuilder->extractVehicle($subject, $haystack),
@@ -78,8 +97,16 @@ final class IncomingFineLookup
         $lookupError = null;
 
         try {
-            if ($fields['vehicle'] !== '' && $fields['ticket_date'] !== '') {
-                $rentals = $this->wheelsys->findRentalsCoveringDate($fields['vehicle'], $fields['ticket_date']);
+            if ($fields['vehicle'] !== '' && ($fields['ticket_datetime'] !== '' || $fields['ticket_date'] !== '')) {
+                $rentals = $this->wheelsys->findRentalsCoveringDate(
+                    $fields['vehicle'],
+                    $fields['ticket_date'] !== '' ? $fields['ticket_date'] : substr($fields['ticket_datetime'], 0, 10),
+                    $fields['ticket_datetime'] !== '' ? $fields['ticket_datetime'] : (
+                        ($fields['ticket_date'] !== '' && $fields['ticket_time'] !== '')
+                            ? $fields['ticket_date'].' '.$fields['ticket_time']
+                            : null
+                    ),
+                );
             } elseif ($fields['vehicle'] !== '') {
                 $rentals = $this->wheelsys->searchRentalsByVehicle($fields['vehicle']);
             }
@@ -112,9 +139,9 @@ final class IncomingFineLookup
                 : ($lookupError
                     ?: ($fields['vehicle'] === ''
                         ? 'Missing vehicle / plate'
-                        : ($fields['ticket_date'] === ''
-                            ? 'No covering rental (no ticket date)'
-                            : 'No covering rental for plate/date'))));
+                        : ($fields['ticket_date'] === '' && $fields['ticket_datetime'] === ''
+                            ? 'No covering rental (no ticket date/time)'
+                            : 'No covering rental for plate/date/time'))));
 
         $draft = $this->replyBuilder->build($message, $wheelsys);
 
@@ -182,6 +209,52 @@ final class IncomingFineLookup
             'draft' => $draft,
             'log' => $log,
             'rentals' => $rentals,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return array<string, mixed>
+     */
+    private function skipNonFine(array $message, ?int $userId, string $detail): array
+    {
+        $messageId = (string) ($message['id'] ?? '');
+        $log = FineProcessLog::query()->firstOrNew(['graph_message_id' => $messageId]);
+        $log->fill([
+            'mailbox' => $log->mailbox ?: app(MicrosoftGraphInbox::class)->mailbox(),
+            'from_email' => $message['from_email'] ?? $log->from_email,
+            'subject' => $message['subject'] ?? $log->subject,
+            'received_at' => filled($message['received_at'] ?? null)
+                ? \Illuminate\Support\Carbon::parse((string) $message['received_at'])
+                : $log->received_at,
+            'authority_id' => $message['authority_id'] ?? $log->authority_id,
+            'authority_name' => (($message['authority_name'] ?? '—') !== '—' ? $message['authority_name'] : $log->authority_name),
+            'status' => 'skipped',
+            'wheels_export_status' => FineProcessLog::WHEELS_EXPORT_SKIPPED,
+            'processed_by' => $userId ?? $log->processed_by,
+            'processed_at' => $log->processed_at ?: now(),
+            'error' => null,
+            'workflow' => [
+                'steps' => [
+                    ['key' => 'lookup', 'ok' => false, 'detail' => $detail],
+                ],
+            ],
+        ])->save();
+
+        return [
+            'message' => $message,
+            'lookup_status' => 'not_found',
+            'lookup_detail' => $detail,
+            'vehicle' => '',
+            'reference' => '',
+            'ticket_date' => '',
+            'ticket_time' => '',
+            'ticket_datetime' => '',
+            'rental' => null,
+            'wheelsys' => null,
+            'draft' => [],
+            'log' => $log,
+            'rentals' => [],
         ];
     }
 }

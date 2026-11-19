@@ -14,7 +14,7 @@ class OpenWheelsys extends Page
 
     protected static ?string $title = 'Open Wheelsys';
 
-    protected static ?int $navigationSort = 5;
+    protected static ?int $navigationSort = 6;
 
     protected static string $view = 'filament.pages.open-wheelsys';
 

@@ -54,6 +54,13 @@ class WheelsExcelExport extends Page
     /** Search text inside Start import file picker. */
     public string $importPickerQuery = '';
 
+    /**
+     * Expanded accordion keys (`__new__` or wheels_export_batch).
+     *
+     * @var list<string>
+     */
+    public array $openBatches = ['__new__'];
+
     public function mount(): void
     {
         $this->selectedIds = [];
@@ -65,11 +72,17 @@ class WheelsExcelExport extends Page
         $this->importPickerBatch = '';
         $this->importPickerShowImported = false;
         $this->importPickerQuery = '';
+        $this->openBatches = ['__new__'];
     }
 
     public function updatedFileFilter(): void
     {
         $this->selectedIds = [];
+        if ($this->fileFilter !== '') {
+            $this->openBatches = [$this->fileFilter];
+        } elseif (! in_array('__new__', $this->openBatches, true)) {
+            $this->openBatches = ['__new__'];
+        }
     }
 
     public function updatedStatusFilter(): void
@@ -229,6 +242,172 @@ class WheelsExcelExport extends Page
             ->limit(400)
             ->get()
             ->all();
+    }
+
+    /**
+     * Accordion groups: new (not in a file) first, then each import file (newest first).
+     *
+     * @return list<array{
+     *     key: string,
+     *     title: string,
+     *     subtitle: string|null,
+     *     sharepoint_url: string|null,
+     *     is_new: bool,
+     *     import_status: 'new'|'imported'|'not_imported'|'partial',
+     *     import_label: string,
+     *     logs: list<FineProcessLog>
+     * }>
+     */
+    public function getLogGroupsProperty(): array
+    {
+        $newLogs = [];
+        /** @var array<string, array{title:string,subtitle:?string,sharepoint_url:?string,exported_at:?string,logs:list<FineProcessLog>}> $files */
+        $files = [];
+
+        foreach ($this->logs as $log) {
+            $inFile = $log->wheels_export_status === FineProcessLog::WHEELS_EXPORT_EXPORTED
+                && filled($log->wheels_export_batch);
+
+            if (! $inFile) {
+                $newLogs[] = $log;
+
+                continue;
+            }
+
+            $batch = (string) $log->wheels_export_batch;
+            if (! isset($files[$batch])) {
+                $fileName = (string) ($log->wheels_export_file_name ?: ('wheels-export-'.$batch.'.xlsx'));
+                $when = optional($log->wheels_exported_at)->timezone(config('app.timezone'))?->format('Y-m-d H:i');
+                $files[$batch] = [
+                    'title' => $fileName,
+                    'subtitle' => $when,
+                    'sharepoint_url' => $log->wheels_export_sharepoint_url ?: null,
+                    'exported_at' => $log->wheels_exported_at?->toIso8601String(),
+                    'logs' => [],
+                ];
+            }
+            $files[$batch]['logs'][] = $log;
+            if (! $files[$batch]['sharepoint_url'] && filled($log->wheels_export_sharepoint_url)) {
+                $files[$batch]['sharepoint_url'] = $log->wheels_export_sharepoint_url;
+            }
+        }
+
+        uasort($files, static function (array $a, array $b): int {
+            return strcmp((string) ($b['exported_at'] ?? ''), (string) ($a['exported_at'] ?? ''));
+        });
+
+        $groups = [];
+        // Always show "New" on top unless filtering a specific import file.
+        if ($this->fileFilter === '') {
+            $groups[] = [
+                'key' => '__new__',
+                'title' => 'New · not in a file yet',
+                'subtitle' => $newLogs === []
+                    ? 'None waiting'
+                    : count($newLogs).' ready for Generate import file',
+                'sharepoint_url' => null,
+                'is_new' => true,
+                'import_status' => 'new',
+                'import_label' => 'Not in file',
+                'logs' => $newLogs,
+            ];
+        }
+
+        foreach ($files as $batch => $file) {
+            $importMeta = $this->fileImportStatus($file['logs']);
+            $groups[] = [
+                'key' => $batch,
+                'title' => $file['title'],
+                'subtitle' => trim(($file['subtitle'] ? 'Prepared '.$file['subtitle'].' · ' : '').count($file['logs']).' fine(s)'),
+                'sharepoint_url' => $file['sharepoint_url'],
+                'is_new' => false,
+                'import_status' => $importMeta['status'],
+                'import_label' => $importMeta['label'],
+                'logs' => $file['logs'],
+            ];
+        }
+
+        return $groups;
+    }
+
+    /**
+     * @param  list<FineProcessLog>  $logs
+     * @return array{status: 'imported'|'not_imported'|'partial', label: string}
+     */
+    private function fileImportStatus(array $logs): array
+    {
+        $total = count($logs);
+        if ($total === 0) {
+            return ['status' => 'not_imported', 'label' => 'Not imported'];
+        }
+
+        $imported = 0;
+        foreach ($logs as $log) {
+            if ($log->wheels_import_status === FineProcessLog::WHEELS_IMPORT_IMPORTED) {
+                $imported++;
+            }
+        }
+
+        if ($imported === $total) {
+            return ['status' => 'imported', 'label' => 'Imported'];
+        }
+
+        if ($imported === 0) {
+            return ['status' => 'not_imported', 'label' => 'Not imported'];
+        }
+
+        return [
+            'status' => 'partial',
+            'label' => 'Partial · '.$imported.'/'.$total.' imported',
+        ];
+    }
+
+    public function toggleBatch(string $key): void
+    {
+        if (in_array($key, $this->openBatches, true)) {
+            $this->openBatches = array_values(array_filter(
+                $this->openBatches,
+                static fn (string $open): bool => $open !== $key
+            ));
+
+            return;
+        }
+
+        $this->openBatches[] = $key;
+    }
+
+    public function isBatchOpen(string $key): bool
+    {
+        return in_array($key, $this->openBatches, true);
+    }
+
+    public function selectGroup(string $key): void
+    {
+        $ids = [];
+        foreach ($this->logGroups as $group) {
+            if (($group['key'] ?? '') !== $key) {
+                continue;
+            }
+            foreach ($group['logs'] as $log) {
+                if ($this->rowIsSelectable($log)) {
+                    $ids[] = (int) $log->id;
+                }
+            }
+        }
+
+        if ($ids === []) {
+            Notification::make()->warning()->title('No selectable fines in this group')->send();
+
+            return;
+        }
+
+        $this->selectedIds = array_values(array_unique(array_merge(
+            array_map('intval', $this->selectedIds),
+            $ids
+        )));
+        if (! $this->isBatchOpen($key)) {
+            $this->openBatches[] = $key;
+        }
     }
 
     /**

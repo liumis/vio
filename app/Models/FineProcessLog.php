@@ -38,6 +38,8 @@ class FineProcessLog extends Model
         'wheels_imported_by',
         'wheels_violation_id',
         'wheels_verify_detail',
+        'wheels_tv_state',
+        'wheels_paid_date',
         'email_to',
         'email_sent_at',
         'moved_to_processed',
@@ -54,6 +56,10 @@ class FineProcessLog extends Model
         'marksign_signed_pdf_path',
         'chargeback_marked_at',
         'chargeback_marked_by',
+        'paid_at',
+        'paid_marked_by',
+        'debt_list_marked_at',
+        'debt_list_marked_by',
     ];
 
     public const WHEELS_EXPORT_PENDING = 'pending';
@@ -85,6 +91,9 @@ class FineProcessLog extends Model
             'wheels_exported_at' => 'datetime',
             'wheels_imported_at' => 'datetime',
             'chargeback_marked_at' => 'datetime',
+            'paid_at' => 'datetime',
+            'debt_list_marked_at' => 'datetime',
+            'wheels_paid_date' => 'date',
             'ticket_date' => 'date',
             'sharepoint_urls' => 'array',
             'workflow' => 'array',
@@ -93,6 +102,16 @@ class FineProcessLog extends Model
             'attachments_uploaded' => 'integer',
             'rental_id' => 'integer',
         ];
+    }
+
+    public function isPaid(): bool
+    {
+        return $this->paid_at !== null;
+    }
+
+    public function isMarkedForDebtList(): bool
+    {
+        return $this->debt_list_marked_at !== null;
     }
 
     /**

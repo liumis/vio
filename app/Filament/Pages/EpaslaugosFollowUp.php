@@ -23,7 +23,7 @@ class EpaslaugosFollowUp extends Page
 
     protected static ?string $slug = 'epaslaugos-atmesti';
 
-    protected static ?int $navigationSort = 6;
+    protected static ?int $navigationSort = 7;
 
     protected static string $view = 'filament.pages.epaslaugos-follow-up';
 

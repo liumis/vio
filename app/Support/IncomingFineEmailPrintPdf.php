@@ -81,7 +81,7 @@ final class IncomingFineEmailPrintPdf
      * Create (or reuse) a local Print-to-PDF of the inbox message.
      *
      * @param  array<string, mixed>  $message
-     * @return array{relative_path:string,absolute_path:string,saved_dir:string,bytes:int}|null
+     * @return array{relative_path:string,absolute_path:string,saved_dir:string,bytes:int,body_text:string}|null
      */
     public function ensureLocalPdf(array $message, ?string $savedDir = null): ?array
     {
@@ -103,17 +103,6 @@ final class IncomingFineEmailPrintPdf
         $relative = $dir.'/'.self::LOCAL_FILE;
         $disk = Storage::disk('local');
 
-        if ($disk->exists($relative) && (int) $disk->size($relative) > 500) {
-            return [
-                'relative_path' => $relative,
-                'absolute_path' => $disk->path($relative),
-                'saved_dir' => $dir,
-                'bytes' => (int) $disk->size($relative),
-            ];
-        }
-
-        $disk->makeDirectory($dir);
-
         $htmlBody = '';
         $textBody = '';
         try {
@@ -126,6 +115,21 @@ final class IncomingFineEmailPrintPdf
         } catch (Throwable) {
             $textBody = trim((string) ($message['preview'] ?? ''));
         }
+        if (trim($textBody) === '') {
+            $textBody = trim((string) ($message['preview'] ?? ''));
+        }
+
+        if ($disk->exists($relative) && (int) $disk->size($relative) > 500) {
+            return [
+                'relative_path' => $relative,
+                'absolute_path' => $disk->path($relative),
+                'saved_dir' => $dir,
+                'bytes' => (int) $disk->size($relative),
+                'body_text' => $textBody,
+            ];
+        }
+
+        $disk->makeDirectory($dir);
 
         if (trim(strip_tags($htmlBody)) === '' && trim($textBody) === '') {
             $textBody = trim((string) ($message['preview'] ?? ''));
@@ -168,6 +172,7 @@ final class IncomingFineEmailPrintPdf
             'absolute_path' => $disk->path($relative),
             'saved_dir' => $dir,
             'bytes' => strlen($binary),
+            'body_text' => $textBody,
         ];
     }
 

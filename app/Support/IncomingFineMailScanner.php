@@ -122,6 +122,31 @@ final class IncomingFineMailScanner
         'thank you for your payment',
         'we have received your payment',
         'receipt of payment',
+        // Annulment / cancellation replies (Unipark etc.) — no plate / no Wheelsys work
+        'sekmingai anuliavome',
+        'pranesima anuliav',
+        'pranesima jusu vardu sekmingai anuliav',
+        'anuliavome',
+        'anuliuotas',
+        'anuliuota',
+        'pranesimas anuliuotas',
+        'bauda anuliuota',
+        'atsauktas pranesimas',
+        'atsaukem pranesima',
+        'successfully cancelled',
+        'successfully canceled',
+        'we have cancelled',
+        'we have canceled',
+        'notice has been cancelled',
+        'notice has been canceled',
+        'ticket cancelled',
+        'ticket canceled',
+        'annulled',
+        'annulment',
+        // Latvian auto-replies / non-actionable correspondence
+        'automatiska atbilde',
+        'automatic reply',
+        'out of office',
     ];
 
     public function __construct(
@@ -188,7 +213,7 @@ final class IncomingFineMailScanner
         $results = [];
 
         foreach ($messages as $message) {
-            if ($this->isNonFineNotice(
+            if (self::isNonFineNotice(
                 (string) ($message['subject'] ?? ''),
                 (string) ($message['preview'] ?? '')
             )) {
@@ -282,9 +307,10 @@ final class IncomingFineMailScanner
     }
 
     /**
-     * Skip move-car / payment-receipt / other operational mails (even from Authority domains).
+     * Skip move-car / payment-receipt / annulment / other operational mails
+     * (even from Authority domains).
      */
-    private function isNonFineNotice(string $subject, string $preview): bool
+    public static function isNonFineNotice(string $subject, string $preview = ''): bool
     {
         $haystack = mb_strtolower(trim($subject."\n".$preview), 'UTF-8');
         if ($haystack === '') {

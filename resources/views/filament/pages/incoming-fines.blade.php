@@ -370,9 +370,19 @@
                             @php
                                 $lookup = $row['lookup_status'] ?? null;
                                 $msgId = (string) ($row['id'] ?? '');
-                                $alreadyHave = ! empty($row['in_vio'])
-                                    || ! empty($row['in_excel_queue'])
-                                    || ! empty($row['excel_exported']);
+                                // Found / Wheels queue / exported → locked. Not found stays selectable for retry.
+                                $selectionLocked = array_key_exists('selection_locked', $row)
+                                    ? (bool) $row['selection_locked']
+                                    : (
+                                        ! empty($row['in_excel_queue'])
+                                        || ! empty($row['excel_exported'])
+                                        || $lookup === 'found'
+                                        || (
+                                            ! empty($row['in_vio'])
+                                            && $lookup !== 'not_found'
+                                            && filled($row['driver_name'] ?? null)
+                                        )
+                                    );
                                 $fromLabel = trim((string) ($row['from_name'] ?? ''));
                                 if ($fromLabel === '') {
                                     $fromLabel = trim((string) ($row['from_email'] ?? ''));
@@ -383,7 +393,7 @@
                             @endphp
                             <tr
                                 wire:key="fine-{{ $msgId !== '' ? $msgId : $index }}"
-                                @class(['vio-row-inactive' => $alreadyHave])
+                                @class(['vio-row-inactive' => $selectionLocked])
                             >
                                 <td>
                                     @if ($msgId !== '')
@@ -392,7 +402,7 @@
                                             value="{{ $msgId }}"
                                             wire:model.live="selectedIds"
                                             class="rounded border-slate-300"
-                                            @disabled($alreadyHave)
+                                            @disabled($selectionLocked)
                                         />
                                     @endif
                                 </td>
@@ -449,14 +459,12 @@
                                             <span class="vio-chip vio-chip-indigo">Already have · Ready</span>
                                         @elseif (! empty($row['in_vio']) && $lookup === 'found')
                                             <span class="vio-chip vio-chip-ok">Already have · Found</span>
-                                        @elseif (! empty($row['in_vio']) && $lookup === 'not_found')
-                                            <span class="vio-chip vio-chip-warn">Already have · Not found</span>
+                                        @elseif ($lookup === 'not_found')
+                                            <span class="vio-chip vio-chip-warn">Not found · retry</span>
                                         @elseif (! empty($row['in_vio']))
                                             <span class="vio-chip vio-chip-indigo">Already have</span>
                                         @elseif ($lookup === 'found')
                                             <span class="vio-chip vio-chip-ok">Found</span>
-                                        @elseif ($lookup === 'not_found')
-                                            <span class="vio-chip vio-chip-warn">Not found</span>
                                         @else
                                             <span class="vio-chip vio-chip-slate">New</span>
                                         @endif
@@ -730,6 +738,63 @@
                     </div>
                 @endif
 
+                @if ($sourceMailHtml !== '' || $sourceMailText !== '' || $sourceFiles !== [] || $sourceExtractText !== '')
+                    <div style="padding: 16px 28px; border-bottom: 1px solid #eef2f7; background: #fff7ed;">
+                        <p class="text-xs font-semibold uppercase text-amber-800" style="margin: 0 0 10px;">
+                            Original email &amp; attachments
+                            <span style="font-weight:500;text-transform:none;color:#9a3412;"> · kai OCR nepavyksta — skaityk čia</span>
+                        </p>
+
+                        @if ($sourceFiles !== [])
+                            <div class="flex flex-wrap gap-2" style="margin-bottom: 12px;">
+                                @foreach ($sourceFiles as $file)
+                                    <div class="flex items-center gap-2 rounded-lg bg-white ring-1 ring-amber-200" style="padding: 6px 10px;">
+                                        <span class="text-xs font-semibold text-slate-800" title="{{ $file['name'] }}">
+                                            {{ \Illuminate\Support\Str::limit($file['name'], 36) }}
+                                            <span class="font-normal text-slate-500">
+                                                · {{ $file['kind'] }}
+                                                @if (($file['bytes'] ?? 0) > 0)
+                                                    · {{ number_format(($file['bytes'] ?? 0) / 1024, 0) }} KB
+                                                @endif
+                                            </span>
+                                        </span>
+                                        @if (in_array($file['kind'] ?? '', ['pdf', 'image'], true))
+                                            <x-filament::button size="xs" color="gray" wire:click="openSourceFile(@js($file['key']))" wire:loading.attr="disabled">
+                                                Open
+                                            </x-filament::button>
+                                        @endif
+                                        <x-filament::button size="xs" color="warning" wire:click="downloadSourceFile(@js($file['key']))" wire:loading.attr="disabled">
+                                            Download
+                                        </x-filament::button>
+                                    </div>
+                                @endforeach
+                            </div>
+                        @else
+                            <p class="text-xs text-amber-900" style="margin: 0 0 10px;">Priedų nerasta (arba dar neatsisiųsti).</p>
+                        @endif
+
+                        @if ($sourceMailHtml !== '')
+                            <p class="text-[10px] font-semibold uppercase text-amber-800" style="margin: 0 0 6px;">Inbound mail</p>
+                            <iframe
+                                title="Original email"
+                                sandbox=""
+                                srcdoc="{{ e($sourceMailHtml) }}"
+                                style="width:100%;height:280px;border:1px solid #fdba74;border-radius:8px;background:#fff;"
+                            ></iframe>
+                        @elseif ($sourceMailText !== '')
+                            <p class="text-[10px] font-semibold uppercase text-amber-800" style="margin: 0 0 6px;">Inbound mail (text)</p>
+                            <pre class="overflow-auto rounded-lg bg-white text-xs text-slate-800 ring-1 ring-amber-200" style="max-height:220px;padding:12px;white-space:pre-wrap;">{{ $sourceMailText }}</pre>
+                        @endif
+
+                        @if ($sourceExtractText !== '')
+                            <details style="margin-top: 12px;">
+                                <summary class="cursor-pointer text-xs font-semibold text-amber-900">Extracted / OCR text</summary>
+                                <pre class="mt-2 overflow-auto rounded-lg bg-white text-xs text-slate-800 ring-1 ring-amber-200" style="max-height:200px;padding:12px;white-space:pre-wrap;">{{ \Illuminate\Support\Str::limit($sourceExtractText, 12000) }}</pre>
+                            </details>
+                        @endif
+                    </div>
+                @endif
+
                 <div
                     class="grid gap-3 sm:grid-cols-3"
                     style="padding: 16px 28px; border-bottom: 1px solid #eef2f7; background: #f8fafc;"
@@ -743,12 +808,22 @@
                         <div class="mt-1 text-sm font-medium text-gray-900">{{ ($previewDraft['vehicle_hint'] ?? '') !== '' ? $previewDraft['vehicle_hint'] : '—' }}</div>
                     </div>
                     <div>
-                        <div class="text-xs font-semibold uppercase text-gray-500">Ticket date</div>
+                        <div class="text-xs font-semibold uppercase text-gray-500">Ticket date / time</div>
                         <div class="mt-1 text-sm font-medium text-gray-900">
-                            {{ ($previewDraft['ticket_date_hint'] ?? '') !== '' ? $previewDraft['ticket_date_hint'] : '—' }}
-                            @if (($previewDraft['ticket_time_hint'] ?? '') !== '')
-                                <span class="text-gray-500">{{ $previewDraft['ticket_time_hint'] }}</span>
-                            @endif
+                            @php
+                                $ticketMoment = trim(
+                                    (string) (($previewDraft['ticket_date_hint'] ?? '').' '.($previewDraft['ticket_time_hint'] ?? ''))
+                                );
+                            @endphp
+                            {{ $ticketMoment !== ''
+                                ? \App\Support\WheelsysClient::formatDateTimeLabel(
+                                    ($previewDraft['ticket_date_hint'] ?? '').(
+                                        filled($previewDraft['ticket_time_hint'] ?? null)
+                                            ? ' '.$previewDraft['ticket_time_hint']
+                                            : ''
+                                    )
+                                )
+                                : '—' }}
                         </div>
                     </div>
                 </div>
@@ -792,12 +867,21 @@
                                 style="padding: 10px 12px;"
                             />
                             <input
-                                type="date"
+                                type="datetime-local"
                                 wire:model="searchTicketDate"
+                                step="60"
                                 class="rounded-lg border-gray-300 text-sm shadow-sm"
                                 style="padding: 10px 12px;"
+                                title="Offense date and time (minutes only)"
                             />
-                            <x-filament::button size="sm" color="gray" wire:click="clearSearchTicketDate" title="Clear date — search without date filter">
+                            <x-filament::button
+                                size="sm"
+                                color="gray"
+                                wire:click="clearSearchTicketDate"
+                                wire:loading.attr="disabled"
+                                wire:target="clearSearchTicketDate,searchWheelsys"
+                                title="Clear date/time and search all rentals for this plate"
+                            >
                                 Reset date
                             </x-filament::button>
                             <x-filament::button size="sm" wire:click="searchWheelsys" wire:loading.attr="disabled">
@@ -822,11 +906,14 @@
                                             @php
                                                 $dateLabel = '—';
                                                 if (($wrow['_source'] ?? '') === 'rental') {
-                                                    $from = substr((string) ($wrow['date_from'] ?? ''), 0, 10);
-                                                    $to = substr((string) ($wrow['date_to'] ?? ''), 0, 10);
-                                                    $dateLabel = trim($from.($from !== '' && $to !== '' ? ' → ' : '').$to) ?: '—';
+                                                    $dateLabel = \App\Support\WheelsysClient::formatRentalWindow(
+                                                        $wrow['date_from'] ?? null,
+                                                        $wrow['date_to'] ?? null,
+                                                    ) ?: '—';
+                                                } elseif (filled($wrow['ticket_datetime'] ?? null)) {
+                                                    $dateLabel = \App\Support\WheelsysClient::formatDateTimeLabel($wrow['ticket_datetime']);
                                                 } elseif (filled($wrow['ticket_date'] ?? null)) {
-                                                    $dateLabel = (string) $wrow['ticket_date'];
+                                                    $dateLabel = \App\Support\WheelsysClient::formatDateTimeLabel($wrow['ticket_date']);
                                                 }
                                             @endphp
                                             <tr
@@ -864,7 +951,7 @@
 
                 <div style="padding: 24px 28px; border-bottom: 1px solid #eef2f7;">
                     <div class="flex items-center justify-between gap-3" style="margin: 0 0 12px;">
-                        <p class="text-xs font-semibold uppercase text-gray-500" style="margin: 0;">Email HTML</p>
+                        <p class="text-xs font-semibold uppercase text-gray-500" style="margin: 0;">Reply draft (HTML)</p>
                         @if (! $showTemplateEditor)
                             <x-filament::button size="sm" color="gray" wire:click="openTemplateEditor">
                                 Edit text

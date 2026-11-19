@@ -57,6 +57,7 @@ final class IncomingFineWorkflow
             $steps[] = ['key' => 'extract', 'ok' => false, 'detail' => $e->getMessage()];
         }
 
+        $bodyText = '';
         // JUDU / Unipark / Parkavimas mieste: Print email → PDF (instruction).
         try {
             $emailPrint = app(IncomingFineEmailPrintPdf::class)->ensureLocalPdf(
@@ -65,11 +66,12 @@ final class IncomingFineWorkflow
             );
             if ($emailPrint !== null) {
                 $extract['saved_dir'] = $emailPrint['saved_dir'];
+                $bodyText = trim((string) ($emailPrint['body_text'] ?? ''));
                 $extract['files'][] = [
                     'name' => IncomingFineEmailPrintPdf::LOCAL_FILE,
                     'path' => $emailPrint['relative_path'],
                     'bytes' => $emailPrint['bytes'],
-                    'text_chars' => 0,
+                    'text_chars' => strlen($bodyText),
                     'source' => 'email-print',
                     'error' => null,
                 ];
@@ -85,11 +87,17 @@ final class IncomingFineWorkflow
             }
         }
 
-        $message['attachment_text'] = (string) ($extract['text'] ?? '');
+        $haystackBuilder = app(IncomingFineTextHaystack::class);
+        if ($bodyText === '') {
+            $bodyText = $haystackBuilder->fetchBodyText($message);
+        }
+
+        $message['body_text'] = $bodyText;
         $message['attachment_extract'] = $extract;
 
         $subject = (string) ($message['subject'] ?? '');
-        $haystack = trim((string) ($message['preview'] ?? '')."\n".$message['attachment_text']);
+        $haystack = $haystackBuilder->build($message, $extract, $bodyText);
+        $message['attachment_text'] = $haystack;
         $fields = [
             'reference' => $this->replyBuilder->extractReference($subject, $haystack),
             'vehicle' => $this->replyBuilder->extractVehicle($subject, $haystack),

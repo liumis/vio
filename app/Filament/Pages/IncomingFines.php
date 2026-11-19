@@ -12,9 +12,11 @@ use App\Support\IncomingFineReplyBuilder;
 use App\Support\IncomingFineReplySender;
 use App\Support\IncomingFineWorkflow;
 use App\Support\LatviaAuthorityPackageService;
+use App\Support\MicrosoftGraphInbox;
 use App\Support\WheelsysClient;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Auth;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 use Filament\Forms;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
@@ -100,6 +102,21 @@ class IncomingFines extends Page implements HasForms
     public array $selectedIds = [];
 
     public ?int $previewIndex = null;
+
+    /** Original inbound HTML (Graph) for manual review when OCR/extract fails. */
+    public string $sourceMailHtml = '';
+
+    public string $sourceMailText = '';
+
+    /** Combined extract / OCR text from saved attachments. */
+    public string $sourceExtractText = '';
+
+    /**
+     * Local / Graph attachments available in Details.
+     *
+     * @var list<array{key:string,name:string,source:string,path?:string,graph_id?:string,bytes:int,kind:string}>
+     */
+    public array $sourceFiles = [];
 
     public function mount(): void
     {
@@ -205,10 +222,11 @@ class IncomingFines extends Page implements HasForms
                 }
             }
 
-            // Drop any selected ids that are already in VIO (checkboxes disabled).
+            // Drop selected ids whose checkboxes are locked (found / Wheels queue / exported).
+            // "Not found" stays selectable so Find driver can be retried.
             $blocked = [];
             foreach ($this->results as $row) {
-                if (! empty($row['in_vio']) || ! empty($row['in_excel_queue']) || ! empty($row['excel_exported'])) {
+                if ($this->rowSelectionLocked($row)) {
                     $blocked[(string) ($row['id'] ?? '')] = true;
                 }
             }
@@ -253,6 +271,34 @@ class IncomingFines extends Page implements HasForms
         $this->processLogId = null;
         $this->workflowSteps = [];
         $this->previewIndex = null;
+        $this->sourceMailHtml = '';
+        $this->sourceMailText = '';
+        $this->sourceExtractText = '';
+        $this->sourceFiles = [];
+    }
+
+    /**
+     * Lock selection only when Find driver already succeeded or Wheelsys import is done.
+     * lookup_missing / not_found stays selectable for retry (e.g. after .edoc fix).
+     *
+     * @param  array<string, mixed>  $row
+     */
+    private function rowSelectionLocked(array $row): bool
+    {
+        if (! empty($row['in_excel_queue']) || ! empty($row['excel_exported'])) {
+            return true;
+        }
+
+        if (($row['lookup_status'] ?? null) === 'not_found') {
+            return false;
+        }
+
+        if (($row['lookup_status'] ?? null) === 'found') {
+            return true;
+        }
+
+        // Legacy / partial logs: driver already resolved.
+        return ! empty($row['in_vio']) && filled($row['driver_name'] ?? null);
     }
 
     /**
@@ -265,7 +311,7 @@ class IncomingFines extends Page implements HasForms
             if (! is_array($row)) {
                 continue;
             }
-            if (! empty($row['in_vio']) || ! empty($row['in_excel_queue']) || ! empty($row['excel_exported'])) {
+            if ($this->rowSelectionLocked($row)) {
                 continue;
             }
             $id = (string) ($row['id'] ?? '');
@@ -366,6 +412,7 @@ class IncomingFines extends Page implements HasForms
                 $this->results[$i]['in_vio'] = false;
                 $this->results[$i]['in_excel_queue'] = false;
                 $this->results[$i]['excel_exported'] = false;
+                $this->results[$i]['selection_locked'] = false;
 
                 continue;
             }
@@ -385,7 +432,7 @@ class IncomingFines extends Page implements HasForms
                 && filled($log->driver_name);
             $excelExported = $log->wheels_export_status === FineProcessLog::WHEELS_EXPORT_EXPORTED;
 
-            $this->results[$i] = array_merge($row, [
+            $merged = array_merge($row, [
                 'in_vio' => true,
                 'in_excel_queue' => $inExcelQueue,
                 'process_log_id' => $log->id,
@@ -402,7 +449,10 @@ class IncomingFines extends Page implements HasForms
                 'wheels_import_status' => $log->wheels_import_status,
                 'wheels_export_status' => $log->wheels_export_status,
                 'workflow_steps' => is_array($log->workflow['steps'] ?? null) ? $log->workflow['steps'] : [],
+                'local_attachment_dir' => $log->local_attachment_dir,
             ]);
+            $merged['selection_locked'] = $this->rowSelectionLocked($merged);
+            $this->results[$i] = $merged;
         }
     }
 
@@ -433,14 +483,258 @@ class IncomingFines extends Page implements HasForms
             }
             $this->wheelsysSelectedIndex = $this->wheelsysResults !== [] ? 0 : null;
             $this->searchVehicle = (string) ($row['vehicle'] ?? $this->previewDraft['vehicle_hint'] ?? '');
-            $this->searchTicketDate = filled($row['ticket_date'] ?? null) ? (string) $row['ticket_date'] : null;
+            $this->searchTicketDate = $this->ticketMomentForSearchInput(
+                $row['ticket_datetime'] ?? null,
+                $row['ticket_date'] ?? ($this->previewDraft['ticket_date_hint'] ?? null),
+                $row['ticket_time'] ?? ($this->previewDraft['ticket_time_hint'] ?? null),
+            );
             $this->processLogId = isset($row['process_log_id']) ? (int) $row['process_log_id'] : null;
             $this->workflowSteps = is_array($row['workflow_steps'] ?? null) ? $row['workflow_steps'] : [];
             $this->showTemplateEditor = false;
+            $this->loadSourceMaterials($row);
             $this->showPreview = true;
         } catch (Throwable $e) {
             Notification::make()->danger()->title('Details failed')->body($e->getMessage())->send();
         }
+    }
+
+    /**
+     * Load original inbound mail + attachments for manual plate/driver reading.
+     *
+     * @param  array<string, mixed>  $row
+     */
+    private function loadSourceMaterials(array $row): void
+    {
+        $this->sourceMailHtml = '';
+        $this->sourceMailText = '';
+        $this->sourceExtractText = trim((string) ($row['attachment_text'] ?? ''));
+        $this->sourceFiles = [];
+
+        $messageId = (string) ($row['id'] ?? '');
+        $inbox = app(MicrosoftGraphInbox::class);
+
+        if ($messageId !== '') {
+            try {
+                $this->sourceMailHtml = $inbox->getMessageBodyHtml($messageId);
+            } catch (Throwable) {
+                $this->sourceMailHtml = '';
+            }
+            if ($this->sourceMailHtml === '') {
+                try {
+                    $this->sourceMailText = $inbox->getMessageBodyText($messageId);
+                } catch (Throwable) {
+                    $this->sourceMailText = trim((string) ($row['preview'] ?? ''));
+                }
+            }
+        } else {
+            $this->sourceMailText = trim((string) ($row['preview'] ?? ''));
+        }
+
+        $dir = trim(str_replace('\\', '/', (string) ($row['local_attachment_dir'] ?? '')), '/');
+        if ($dir === '' && $this->processLogId) {
+            $dir = trim(str_replace('\\', '/', (string) (FineProcessLog::query()->find($this->processLogId)?->local_attachment_dir ?? '')), '/');
+        }
+
+        if ($dir !== '' && Storage::disk('local')->exists($dir)) {
+            foreach (Storage::disk('local')->files($dir) as $relative) {
+                $name = basename($relative);
+                $lower = strtolower($name);
+
+                if ($lower === 'combined.extract.txt') {
+                    if ($this->sourceExtractText === '') {
+                        $this->sourceExtractText = trim((string) Storage::disk('local')->get($relative));
+                    }
+
+                    continue;
+                }
+
+                if (str_ends_with($lower, '.extract.txt')) {
+                    continue;
+                }
+
+                $this->sourceFiles[] = [
+                    'key' => 'local:'.$relative,
+                    'name' => $name,
+                    'source' => 'local',
+                    'path' => $relative,
+                    'bytes' => (int) Storage::disk('local')->size($relative),
+                    'kind' => $this->sourceFileKind($name),
+                ];
+            }
+        }
+
+        if ($this->sourceFiles === [] && $messageId !== '' && ! empty($row['has_attachments'])) {
+            try {
+                foreach ($inbox->listFileAttachments($messageId) as $att) {
+                    $name = (string) ($att['name'] ?? 'attachment.bin');
+                    $this->sourceFiles[] = [
+                        'key' => 'graph:'.($att['id'] ?? $name),
+                        'name' => $name,
+                        'source' => 'graph',
+                        'graph_id' => (string) ($att['id'] ?? ''),
+                        'bytes' => (int) ($att['size'] ?? 0),
+                        'kind' => $this->sourceFileKind($name),
+                    ];
+                }
+            } catch (Throwable) {
+                // Non-fatal — operator can still read the mail body.
+            }
+        }
+    }
+
+    private function sourceFileKind(string $name): string
+    {
+        $lower = strtolower($name);
+        if (str_ends_with($lower, '.pdf')) {
+            return 'pdf';
+        }
+        if (preg_match('/\.(jpe?g|png|webp|gif|bmp)$/i', $lower)) {
+            return 'image';
+        }
+        if (preg_match('/\.(edoc|asice)$/i', $lower)) {
+            return 'edoc';
+        }
+
+        return 'file';
+    }
+
+    public function downloadSourceFile(string $key): ?StreamedResponse
+    {
+        $file = $this->findSourceFile($key);
+        if ($file === null) {
+            Notification::make()->warning()->title('Attachment not found')->send();
+
+            return null;
+        }
+
+        try {
+            if (($file['source'] ?? '') === 'local') {
+                $relative = (string) ($file['path'] ?? '');
+                if ($relative === '' || ! Storage::disk('local')->exists($relative)) {
+                    Notification::make()->warning()->title('Local file missing')->send();
+
+                    return null;
+                }
+
+                return response()->streamDownload(
+                    static function () use ($relative): void {
+                        echo Storage::disk('local')->get($relative);
+                    },
+                    (string) ($file['name'] ?? 'attachment.bin'),
+                    ['Content-Type' => $this->mimeForSourceFile($file)],
+                );
+            }
+
+            if (($file['source'] ?? '') === 'graph') {
+                $messageId = (string) ($this->previewMessage['id'] ?? '');
+                $attachmentId = (string) ($file['graph_id'] ?? '');
+                if ($messageId === '' || $attachmentId === '') {
+                    Notification::make()->warning()->title('Graph attachment id missing')->send();
+
+                    return null;
+                }
+
+                $bytes = app(MicrosoftGraphInbox::class)->downloadAttachmentContent($messageId, $attachmentId);
+
+                return response()->streamDownload(
+                    static function () use ($bytes): void {
+                        echo $bytes;
+                    },
+                    (string) ($file['name'] ?? 'attachment.bin'),
+                    ['Content-Type' => $this->mimeForSourceFile($file)],
+                );
+            }
+        } catch (Throwable $e) {
+            Notification::make()->danger()->title('Download failed')->body($e->getMessage())->send();
+        }
+
+        return null;
+    }
+
+    public function openSourceFile(string $key): mixed
+    {
+        $file = $this->findSourceFile($key);
+        if ($file === null) {
+            Notification::make()->warning()->title('Attachment not found')->send();
+
+            return null;
+        }
+
+        $kind = (string) ($file['kind'] ?? 'file');
+        if (! in_array($kind, ['pdf', 'image'], true)) {
+            return $this->downloadSourceFile($key);
+        }
+
+        try {
+            if (($file['source'] ?? '') === 'local') {
+                $relative = (string) ($file['path'] ?? '');
+                $absolute = Storage::disk('local')->path($relative);
+                if (! is_file($absolute)) {
+                    Notification::make()->warning()->title('Local file missing')->send();
+
+                    return null;
+                }
+
+                return response()->file($absolute, [
+                    'Content-Type' => $this->mimeForSourceFile($file),
+                    'Content-Disposition' => 'inline; filename="'.addslashes((string) ($file['name'] ?? 'file')).'"',
+                ]);
+            }
+
+            if (($file['source'] ?? '') === 'graph') {
+                $messageId = (string) ($this->previewMessage['id'] ?? '');
+                $attachmentId = (string) ($file['graph_id'] ?? '');
+                $bytes = app(MicrosoftGraphInbox::class)->downloadAttachmentContent($messageId, $attachmentId);
+                $name = (string) ($file['name'] ?? 'attachment.bin');
+
+                return response()->streamDownload(
+                    static function () use ($bytes): void {
+                        echo $bytes;
+                    },
+                    $name,
+                    [
+                        'Content-Type' => $this->mimeForSourceFile($file),
+                        'Content-Disposition' => 'inline; filename="'.addslashes($name).'"',
+                    ],
+                );
+            }
+        } catch (Throwable $e) {
+            Notification::make()->danger()->title('Open failed')->body($e->getMessage())->send();
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array{key:string,name:string,source:string,path?:string,graph_id?:string,bytes:int,kind:string}|null
+     */
+    private function findSourceFile(string $key): ?array
+    {
+        foreach ($this->sourceFiles as $file) {
+            if (($file['key'] ?? '') === $key) {
+                return $file;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array{name?:string,kind?:string}  $file
+     */
+    private function mimeForSourceFile(array $file): string
+    {
+        return match ($file['kind'] ?? $this->sourceFileKind((string) ($file['name'] ?? ''))) {
+            'pdf' => 'application/pdf',
+            'image' => match (strtolower(pathinfo((string) ($file['name'] ?? ''), PATHINFO_EXTENSION))) {
+                'png' => 'image/png',
+                'gif' => 'image/gif',
+                'webp' => 'image/webp',
+                default => 'image/jpeg',
+            },
+            'edoc' => 'application/vnd.etsi.asic-e+zip',
+            default => 'application/octet-stream',
+        };
     }
 
     /**
@@ -487,7 +781,7 @@ class IncomingFines extends Page implements HasForms
         }
 
         $wheelsys = is_array($result['wheelsys'] ?? null) ? $result['wheelsys'] : null;
-        $this->results[$index] = array_merge($row, $result['message'], [
+        $merged = array_merge($row, $result['message'], [
             'in_vio' => true,
             'lookup_status' => $result['lookup_status'],
             'lookup_detail' => $result['lookup_detail'],
@@ -504,6 +798,7 @@ class IncomingFines extends Page implements HasForms
             'process_log_id' => $result['log']->id,
             'workflow_steps' => $result['log']->workflow['steps'] ?? [],
             'attachment_text' => $result['message']['attachment_text'] ?? '',
+            'local_attachment_dir' => $result['log']->local_attachment_dir,
             'excel_exported' => $result['log']->wheels_export_status === FineProcessLog::WHEELS_EXPORT_EXPORTED,
             'excel_batch' => $result['log']->wheels_export_batch,
             'excel_sharepoint_url' => $result['log']->wheels_export_sharepoint_url,
@@ -513,6 +808,8 @@ class IncomingFines extends Page implements HasForms
                 && filled($result['log']->vehicle)
                 && filled($result['log']->driver_name),
         ]);
+        $merged['selection_locked'] = $this->rowSelectionLocked($merged);
+        $this->results[$index] = $merged;
     }
 
     /**
@@ -583,6 +880,34 @@ class IncomingFines extends Page implements HasForms
     public function clearSearchTicketDate(): void
     {
         $this->searchTicketDate = null;
+        // Reset date = search all rentals for the plate (no covering-date filter).
+        $this->searchWheelsys();
+    }
+
+    /**
+     * Value for datetime-local input (Y-m-d\TH:i), preferring full offense moment.
+     */
+    private function ticketMomentForSearchInput(mixed $datetime, mixed $date = null, mixed $time = null): ?string
+    {
+        $datetime = trim((string) ($datetime ?? ''));
+        $date = trim((string) ($date ?? ''));
+        $time = trim((string) ($time ?? ''));
+
+        try {
+            if ($datetime !== '') {
+                return \Illuminate\Support\Carbon::parse($datetime)->format('Y-m-d\TH:i');
+            }
+            if ($date !== '' && $time !== '') {
+                return \Illuminate\Support\Carbon::parse($date.' '.$time)->format('Y-m-d\TH:i');
+            }
+            if ($date !== '') {
+                return \Illuminate\Support\Carbon::parse($date)->format('Y-m-d\T00:00');
+            }
+        } catch (Throwable) {
+            return $date !== '' ? $date : null;
+        }
+
+        return null;
     }
 
     public function searchWheelsys(): void
@@ -599,16 +924,23 @@ class IncomingFines extends Page implements HasForms
         $client = app(WheelsysClient::class);
 
         try {
-            $ticketDate = filled($this->searchTicketDate) ? $this->searchTicketDate : null;
+            $rawMoment = filled($this->searchTicketDate) ? trim((string) $this->searchTicketDate) : null;
+            $ticketDate = $rawMoment !== null && $rawMoment !== '' ? substr($rawMoment, 0, 10) : null;
+            // T00:00 is used as date-only placeholder in datetime-local — keep day-level covering.
+            $ticketDateTime = ($rawMoment !== null
+                && preg_match('/\d{1,2}:\d{2}/', $rawMoment)
+                && ! preg_match('/T00:00(:00)?$/', $rawMoment))
+                ? str_replace('T', ' ', $rawMoment)
+                : null;
 
-            // Prefer rentals covering the offense date (needed before Create).
+            // Prefer rentals covering the offense date+time (needed before Create).
             $rentals = $ticketDate
-                ? $client->findRentalsCoveringDate($vehicle, $ticketDate)
+                ? $client->findRentalsCoveringDate($vehicle, $ticketDate, $ticketDateTime)
                 : $client->searchRentalsByVehicle($vehicle);
 
             $this->wheelsysResults = array_map(
                 fn (array $rental): array => array_merge(
-                    $client->rentalAsWheelsysDraft($rental, $ticketDate),
+                    $client->rentalAsWheelsysDraft($rental, $ticketDate, $ticketDateTime),
                     [
                         'ticket_number' => $this->previewDraft['reference'] ?? null,
                         '_source' => 'rental',
@@ -680,8 +1012,13 @@ class IncomingFines extends Page implements HasForms
         }
         $this->wheelsysSelected = $row;
         $this->wheelsysResults[$index] = $row;
-        if (filled($row['ticket_date'] ?? null)) {
-            $this->searchTicketDate = (string) $row['ticket_date'];
+        $moment = $this->ticketMomentForSearchInput(
+            $row['ticket_datetime'] ?? null,
+            $row['ticket_date'] ?? null,
+            $row['ticket_time'] ?? null,
+        );
+        if ($moment !== null) {
+            $this->searchTicketDate = $moment;
         }
         if (filled($row['vehicle'] ?? null)) {
             $this->searchVehicle = strtoupper((string) $row['vehicle']);
@@ -841,7 +1178,7 @@ class IncomingFines extends Page implements HasForms
         $ticketTime = $this->previewDraft['ticket_time_hint'] ?? null;
         $ticketDateTime = $wheelsys['ticket_datetime'] ?? null;
         if (! filled($ticketDateTime) && filled($ticketDate) && filled($ticketTime)) {
-            $ticketDateTime = $ticketDate.'T'.$ticketTime.':00';
+            $ticketDateTime = $ticketDate.'T'.$ticketTime;
         }
 
         $draft = [
@@ -917,9 +1254,11 @@ class IncomingFines extends Page implements HasForms
             $this->wheelsysSelected = $result['wheelsys'];
             $this->wheelsysSelectedIndex = $this->wheelsysResults !== [] ? 0 : null;
             $this->searchVehicle = (string) ($result['fields']['vehicle'] ?: ($result['draft']['vehicle_hint'] ?? ''));
-            $this->searchTicketDate = $result['fields']['ticket_date'] !== ''
-                ? $result['fields']['ticket_date']
-                : null;
+            $this->searchTicketDate = $this->ticketMomentForSearchInput(
+                $result['fields']['ticket_datetime'] !== '' ? $result['fields']['ticket_datetime'] : null,
+                $result['fields']['ticket_date'] !== '' ? $result['fields']['ticket_date'] : null,
+                $result['fields']['ticket_time'] !== '' ? $result['fields']['ticket_time'] : null,
+            );
             $this->showTemplateEditor = false;
             $this->showPreview = true;
 

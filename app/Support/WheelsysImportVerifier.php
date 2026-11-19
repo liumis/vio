@@ -70,10 +70,14 @@ class WheelsysImportVerifier
                 continue;
             }
 
+            $state = isset($match['state']) ? (string) $match['state'] : null;
+            $paidDate = filled($match['paid_date'] ?? null) ? (string) $match['paid_date'] : null;
             $log->fill([
                 'wheels_import_status' => FineProcessLog::WHEELS_IMPORT_IMPORTED,
                 'wheels_violation_id' => isset($match['id']) ? (string) $match['id'] : null,
                 'wheels_verify_detail' => $this->detailFromMatch($match),
+                'wheels_tv_state' => $state,
+                'wheels_paid_date' => $paidDate,
                 'wheels_imported_at' => now(),
                 'wheels_imported_by' => $userId,
             ])->save();
@@ -81,6 +85,65 @@ class WheelsysImportVerifier
         }
 
         return compact('verified', 'missing', 'skipped', 'errors');
+    }
+
+    /**
+     * Pull Wheelsys TV State / PAIDDATE for unpaid fines; mark paid when PAIDDATE is set.
+     *
+     * @param  iterable<FineProcessLog>  $logs
+     * @return array{checked: int, paid: int, updated: int, missing: int, errors: list<string>}
+     */
+    public function syncPaymentStatus(iterable $logs, ?int $userId = null): array
+    {
+        $checked = 0;
+        $paid = 0;
+        $updated = 0;
+        $missing = 0;
+        $errors = [];
+
+        foreach ($logs as $log) {
+            if (! $log instanceof FineProcessLog || $log->isPaid()) {
+                continue;
+            }
+
+            $checked++;
+
+            try {
+                $match = $this->findMatch($log);
+            } catch (Throwable $e) {
+                $errors[] = '#'.$log->id.' '.$e->getMessage();
+
+                continue;
+            }
+
+            if ($match === null) {
+                $missing++;
+
+                continue;
+            }
+
+            $state = isset($match['state']) ? (string) $match['state'] : null;
+            $paidDate = filled($match['paid_date'] ?? null) ? (string) $match['paid_date'] : null;
+            $fill = [
+                'wheels_tv_state' => $state,
+                'wheels_paid_date' => $paidDate,
+                'wheels_violation_id' => isset($match['id']) ? (string) $match['id'] : $log->wheels_violation_id,
+                'wheels_verify_detail' => $this->detailFromMatch($match)
+                    .($state !== null && $state !== '' ? ' · state '.$state : '')
+                    .($paidDate ? ' · paid '.$paidDate : ''),
+            ];
+
+            if ($paidDate !== null) {
+                $fill['paid_at'] = \Illuminate\Support\Carbon::parse($paidDate)->startOfDay();
+                $fill['paid_marked_by'] = $userId;
+                $paid++;
+            }
+
+            $log->fill($fill)->save();
+            $updated++;
+        }
+
+        return compact('checked', 'paid', 'updated', 'missing', 'errors');
     }
 
     /**
@@ -172,5 +235,22 @@ class WheelsysImportVerifier
         ]);
 
         return implode(' · ', $parts);
+    }
+
+    /**
+     * Human label for Wheelsys TV State (+ paid override).
+     */
+    public static function stateLabel(?string $state, mixed $paidDate = null): string
+    {
+        if (filled($paidDate)) {
+            return 'Paid';
+        }
+
+        // Wheelsys stores numeric State; import default is "Open" (= 1 in live data).
+        return match ((string) $state) {
+            '1' => 'Open',
+            '' => '—',
+            default => 'State '.$state,
+        };
     }
 }

@@ -298,7 +298,8 @@ final class IncomingFineReplyBuilder
 
         $time = $this->extractTicketTime($subject, $preview);
 
-        return $time !== '' ? $date.'T'.$time.':00' : $date;
+        // Minute precision only — Wheelsys contracts have no seconds.
+        return $time !== '' ? $date.'T'.$time : $date;
     }
 
     /**
@@ -458,9 +459,29 @@ final class IncomingFineReplyBuilder
     public function extractVehicle(string $subject, string $preview = ''): string
     {
         $haystack = strtoupper($subject."\n".$preview);
+        // OCR / HTML often leaves NBSP or odd dashes.
+        $haystack = str_replace(["\xc2\xa0", '–', '—'], [' ', '-', '-'], $haystack);
+        $haystack = preg_replace('/[ \t]+/u', ' ', $haystack) ?? $haystack;
 
+        // Labeled plates: Unipark / JUDU / Vilnius / Latvia CPP / generic.
+        $labelPatterns = [
+            '/(?:VALSTYBIN(?:IS|IO)?\s+NUMER(?:IS|IO)|VALST\.?\s*NR\.?|VALSTYBINIS\s+NR\.?|V\/N|AUTOMOBILIO\s+NUMER(?:IS|IO)|TRANSPORTO\s+PRIEMON[EĖ](?:S)?(?:\s+VALST\.?\s*NR\.?)?|VEHICLE(?:\s+PLATE|\s+NO\.?|REGISTRATION(?:\s+NUMBER|\s+NO\.?)?)?|PLATE(?:\s+NO\.?)?|REG(?:ISTRATION)?(?:\s+NO\.?)?|NUMERIS)\s*[:\-]?\s*([A-Z]{2,3}[\s\-]?\d{2,4})/u',
+            '/(?:VALST\.?\s*NR\.?|V\/N|PLATE)\s*[:\-]?\s*([A-Z]{2,3}[\s\-]?\d{2,4})/u',
+            // Latvian CPP / CSDD style labels inside .edoc PDFs.
+            '/(?:TRANSPORTL[IĪ]DZEKL[AĀ]?\s+RE[GĢ]ISTR[AĀ]CIJAS\s+(?:NR|NUMURS)|RE[GĢ]\.?\s*NR\.?|RE[GĢ]ISTR[AĀ]CIJAS\s+NUMURS|NUMURA\s+Z[IĪ]ME|VALSTS\s+RE[GĢ]ISTR[AĀ]CIJAS\s+(?:NR|NUMURS))\s*[:\-]?\s*([A-Z]{2,3}[\s\-]?\d{2,4})/u',
+        ];
+        foreach ($labelPatterns as $pattern) {
+            if (preg_match($pattern, $haystack, $m)) {
+                $plate = preg_replace('/[\s\-]+/', '', $m[1]) ?? $m[1];
+                if (! $this->isFalsePositivePlate($plate)) {
+                    return $plate;
+                }
+            }
+        }
+
+        // Brand + plate (Julianus / camera OCR): "SKODA NNO302" / "KIA MRH986".
         if (preg_match(
-            '/(?:VALSTYBIN(?:IS|IO)?\s+NUMER(?:IS|IO)|VALST(?:YBINIS)?\s*NR\.?|VALSTYBINIS\s+NR\.?|TRANSPORTO\s+PRIEMON[EĖ]|VEHICLE|PLATE|REG(?:ISTRATION)?)\s*[:\-]?\s*([A-Z]{2,3}[\s\-]?\d{2,4})/u',
+            '/\b(?:AUDI|BMW|KIA|VW|VOLKSWAGEN|TOYOTA|SKODA|ŠKODA|FORD|OPEL|PEUGEOT|RENAULT|HYUNDAI|NISSAN|MAZDA|TESLA|MERCEDES|VOLVO|DACIA|CITROEN|SEAT|FIAT|HONDA|MITSUBISHI|SUZUKI|JEEP|PORSCHE|MINI|CUPRA)\s+([A-Z]{2,3}[\s\-]?\d{2,4})\b/u',
             $haystack,
             $m
         )) {
@@ -468,6 +489,12 @@ final class IncomingFineReplyBuilder
             if (! $this->isFalsePositivePlate($plate)) {
                 return $plate;
             }
+        }
+
+        // Plate glued to date: "MRH986;2026-08-15" / "NNO302;2026-09-30".
+        if (preg_match('/\b([A-Z]{2,3}\d{2,4})\s*;\s*20\d{2}/u', $haystack, $m)
+            && ! $this->isFalsePositivePlate($m[1])) {
+            return $m[1];
         }
 
         if (preg_match('/\b([A-Z]{3}\d{3})\b/', $haystack, $m) && ! $this->isFalsePositivePlate($m[1])) {
@@ -483,8 +510,10 @@ final class IncomingFineReplyBuilder
                     continue;
                 }
                 // preg offset is bytes — use substr, not mb_substr.
-                $before = strtolower(substr($haystack, max(0, $offset - 40), 40));
-                if (str_contains($before, 'nr.') || str_contains($before, 'isakym') || str_contains($before, 'nutarim')) {
+                $before = strtolower(substr($haystack, max(0, $offset - 48), 48));
+                if (str_contains($before, 'nr.') || str_contains($before, 'isakym') || str_contains($before, 'nutarim')
+                    || str_contains($before, 'kodas') || str_contains($before, 'unipark')
+                    || str_contains($before, 're:')) {
                     continue;
                 }
                 $plate = preg_replace('/[\s-]+/', '', $raw) ?? $raw;

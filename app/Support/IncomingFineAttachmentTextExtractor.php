@@ -142,7 +142,9 @@ final class IncomingFineAttachmentTextExtractor
                 }
             }
 
-            $extract = $this->textFromBinary($binary, $name, $contentType, $absolutePath);
+            $extract = $this->isEdocContainer($name, $contentType)
+                ? $this->textFromEdoc($binary, $dir)
+                : $this->textFromBinary($binary, $name, $contentType, $absolutePath);
             $text = trim(preg_replace("/[ \t]+/u", ' ', $extract['text']) ?? $extract['text']);
             $source = $extract['source'];
 
@@ -151,11 +153,13 @@ final class IncomingFineAttachmentTextExtractor
             }
 
             if ($text === '') {
-                $fileMeta['error'] = $source === 'ocr-missing-key'
-                    ? 'scanned PDF — set OCR_SPACE_API_KEY (Futura/SS style)'
-                    : ($source === 'ocr-failed'
-                        ? 'OCR returned empty'
-                        : 'no extractable text (scanned/image PDF)');
+                $fileMeta['error'] = match ($source) {
+                    'ocr-missing-key' => 'scanned PDF — set OCR_SPACE_API_KEY (Futura/SS style)',
+                    'ocr-failed' => 'OCR returned empty',
+                    'edoc-open-failed' => 'could not open .edoc/.asice container',
+                    'edoc-empty' => '.edoc opened but no readable PDF/TXT inside',
+                    default => 'no extractable text (scanned/image PDF)',
+                };
                 $files[] = $fileMeta;
 
                 if ($dir !== null) {
@@ -263,7 +267,26 @@ final class IncomingFineAttachmentTextExtractor
             return true;
         }
 
+        if ($this->isEdocContainer($name, $contentType)) {
+            return true;
+        }
+
         return $this->isImage($name, $contentType);
+    }
+
+    /**
+     * Latvian eParaksts / ASiC-E signed containers (.edoc / .asice) are ZIP archives
+     * with the real PDF (plate, offense date) in the root.
+     */
+    private function isEdocContainer(string $name, string $contentType): bool
+    {
+        $lower = strtolower($name);
+        $contentType = strtolower($contentType);
+
+        return str_ends_with($lower, '.edoc')
+            || str_ends_with($lower, '.asice')
+            || str_contains($contentType, 'asic')
+            || str_contains($contentType, 'edoc');
     }
 
     private function isImage(string $name, string $contentType): bool
@@ -282,6 +305,88 @@ final class IncomingFineAttachmentTextExtractor
         }
 
         return false;
+    }
+
+    /**
+     * @return array{text:string,source:string}
+     */
+    private function textFromEdoc(string $binary, ?string $persistDir): array
+    {
+        $tmp = tempnam(sys_get_temp_dir(), 'edoc_');
+        if (! is_string($tmp)) {
+            return ['text' => '', 'source' => 'edoc-open-failed'];
+        }
+
+        $zipPath = $tmp.'.zip';
+        @rename($tmp, $zipPath);
+        file_put_contents($zipPath, $binary);
+
+        $zip = new \ZipArchive;
+        if ($zip->open($zipPath) !== true) {
+            @unlink($zipPath);
+
+            return ['text' => '', 'source' => 'edoc-open-failed'];
+        }
+
+        $chunks = [];
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $entry = $zip->getNameIndex($i);
+            if (! is_string($entry) || $entry === '' || str_ends_with($entry, '/')) {
+                continue;
+            }
+
+            $normalized = str_replace('\\', '/', $entry);
+            $base = basename($normalized);
+            $baseLower = strtolower($base);
+
+            // Skip ASiC metadata / signatures.
+            if ($baseLower === 'mimetype'
+                || str_starts_with(strtolower($normalized), 'meta-inf/')
+                || str_starts_with(strtolower($baseLower), 'edoc_signatures')
+                || str_starts_with(strtolower($baseLower), 'signatures')) {
+                continue;
+            }
+
+            $content = $zip->getFromIndex($i);
+            if (! is_string($content) || $content === '') {
+                continue;
+            }
+
+            if ($persistDir !== null && preg_match('/\.(pdf|txt|jpe?g|png|webp)$/i', $baseLower)) {
+                Storage::disk('local')->put($persistDir.'/edoc-'.$this->safeFileName($base), $content);
+            }
+
+            $innerPath = null;
+            if (preg_match('/\.(jpe?g|png|webp|gif|tif|tiff|bmp)$/i', $baseLower)) {
+                $innerPath = tempnam(sys_get_temp_dir(), 'edocimg_');
+                if (is_string($innerPath)) {
+                    $withExt = $innerPath.'.'.(pathinfo($base, PATHINFO_EXTENSION) ?: 'bin');
+                    @rename($innerPath, $withExt);
+                    $innerPath = $withExt;
+                    file_put_contents($innerPath, $content);
+                }
+            }
+
+            $inner = $this->textFromBinary($content, $base, '', $innerPath);
+            if (is_string($innerPath) && is_file($innerPath)) {
+                @unlink($innerPath);
+            }
+
+            $piece = trim((string) ($inner['text'] ?? ''));
+            if ($piece !== '') {
+                $chunks[] = '['.$base."]\n".$piece;
+            }
+        }
+
+        $zip->close();
+        @unlink($zipPath);
+
+        $text = trim(implode("\n\n", $chunks));
+
+        return [
+            'text' => $text,
+            'source' => $text !== '' ? 'edoc' : 'edoc-empty',
+        ];
     }
 
     /**

@@ -36,7 +36,7 @@ class CourtDecisions extends Page implements HasForms
 
     protected static ?string $slug = 'court-decisions';
 
-    protected static ?int $navigationSort = 7;
+    protected static ?int $navigationSort = 8;
 
     protected static string $view = 'filament.pages.court-decisions';
 

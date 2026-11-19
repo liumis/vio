@@ -27,15 +27,16 @@ class NewFine extends Page implements HasForms
 
     protected static ?string $navigationIcon = 'heroicon-o-document-plus';
 
-    protected static ?string $navigationLabel = 'New fine';
+    protected static ?string $navigationLabel = 'New manual fine';
 
     protected static ?string $navigationGroup = 'Fines';
 
-    protected static ?string $title = 'New fine';
+    protected static ?string $title = 'New manual fine';
 
     protected static ?string $slug = 'new-fine';
 
-    protected static ?int $navigationSort = 2;
+    /** Directly under Manual search in the Fines group. */
+    protected static ?int $navigationSort = 5;
 
     protected static string $view = 'filament.pages.new-fine';
 
@@ -298,7 +299,7 @@ class NewFine extends Page implements HasForms
             'workflow' => [
                 'source' => 'physical_mail',
                 'steps' => array_values(array_filter([
-                    ['key' => 'physical_entry', 'ok' => true, 'detail' => 'Entered from New fine'],
+                    ['key' => 'physical_entry', 'ok' => true, 'detail' => 'Entered from New manual fine'],
                     ['key' => 'sharepoint', 'ok' => true, 'detail' => count($urls).' file(s) on SharePoint'],
                     ['key' => 'wheels_create', 'ok' => false, 'detail' => 'Queued for Wheelsys import'],
                     $isPolandCan ? [
