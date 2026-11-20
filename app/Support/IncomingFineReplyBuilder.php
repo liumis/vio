@@ -475,6 +475,9 @@ final class IncomingFineReplyBuilder
         return '';
     }
 
+    /** LT/LV plate body: ABC123, AB1234, or newer ABC1DE (e.g. CAV1AR). */
+    private const PLATE_BODY = '(?:[A-Z]{3}\d{2,4}|[A-Z]{2}\d{3,4}|[A-Z]{3}\d[A-Z]{2})';
+
     public function extractVehicle(string $subject, string $preview = ''): string
     {
         $haystack = strtoupper($subject."\n".$preview);
@@ -482,12 +485,23 @@ final class IncomingFineReplyBuilder
         $haystack = str_replace(["\xc2\xa0", '–', '—'], [' ', '-', '-'], $haystack);
         $haystack = preg_replace('/[ \t]+/u', ' ', $haystack) ?? $haystack;
 
+        // JUDU subject: "Pranešimo Nr. A1429299 (CAV1AR)" — prefer parenthetical plate.
+        if (preg_match('/PRANE[SŠ]IMO\s+NR\.?\s*[A-Z]?\d[\w\-]*\s*\(\s*('.self::PLATE_BODY.')\s*\)/u', $haystack, $m)
+            && ! $this->isFalsePositivePlate($m[1])) {
+            return $m[1];
+        }
+        if (preg_match('/\(\s*('.self::PLATE_BODY.')\s*\)\s*$/u', strtoupper(trim($subject)), $m)
+            && ! $this->isFalsePositivePlate($m[1])) {
+            return $m[1];
+        }
+
         // Labeled plates: Unipark / JUDU / Vilnius / Latvia CPP / generic.
+        $plateCapture = '('.self::PLATE_BODY.')';
         $labelPatterns = [
-            '/(?:VALSTYBIN(?:IS|IO)?\s+NUMER(?:IS|IO)|VALST\.?\s*NR\.?|VALSTYBINIS\s+NR\.?|V\/N|AUTOMOBILIO\s+NUMER(?:IS|IO)|TRANSPORTO\s+PRIEMON[EĖ](?:S)?(?:\s+VALST\.?\s*NR\.?)?|VEHICLE(?:\s+PLATE|\s+NO\.?|REGISTRATION(?:\s+NUMBER|\s+NO\.?)?)?|PLATE(?:\s+NO\.?)?|REG(?:ISTRATION)?(?:\s+NO\.?)?|NUMERIS)\s*[:\-]?\s*([A-Z]{2,3}[\s\-]?\d{2,4})/u',
-            '/(?:VALST\.?\s*NR\.?|V\/N|PLATE)\s*[:\-]?\s*([A-Z]{2,3}[\s\-]?\d{2,4})/u',
+            '/(?:VALSTYBIN(?:IS|IO)?\s+NUMER(?:IS|IO)|VALST\.?\s*NR\.?|VALSTYBINIS\s+NR\.?|V\/N|AUTOMOBILIO\s+NUMER(?:IS|IO)|TRANSPORTO\s+PRIEMON[EĖ](?:S)?(?:\s+VALST\.?\s*NR\.?)?|VEHICLE(?:\s+PLATE|\s+NO\.?|REGISTRATION(?:\s+NUMBER|\s+NO\.?)?)?|PLATE(?:\s+NO\.?)?|REG(?:ISTRATION)?(?:\s+NO\.?)?|NUMERIS)\s*[:\-]?\s*'.$plateCapture.'/u',
+            '/(?:VALST\.?\s*NR\.?|V\/N|PLATE)\s*[:\-]?\s*'.$plateCapture.'/u',
             // Latvian CPP / CSDD style labels inside .edoc PDFs.
-            '/(?:TRANSPORTL[IĪ]DZEKL[AĀ]?\s+RE[GĢ]ISTR[AĀ]CIJAS\s+(?:NR|NUMURS)|RE[GĢ]\.?\s*NR\.?|RE[GĢ]ISTR[AĀ]CIJAS\s+NUMURS|NUMURA\s+Z[IĪ]ME|VALSTS\s+RE[GĢ]ISTR[AĀ]CIJAS\s+(?:NR|NUMURS))\s*[:\-]?\s*([A-Z]{2,3}[\s\-]?\d{2,4})/u',
+            '/(?:TRANSPORTL[IĪ]DZEKL[AĀ]?\s+RE[GĢ]ISTR[AĀ]CIJAS\s+(?:NR|NUMURS)|RE[GĢ]\.?\s*NR\.?|RE[GĢ]ISTR[AĀ]CIJAS\s+NUMURS|NUMURA\s+Z[IĪ]ME|VALSTS\s+RE[GĢ]ISTR[AĀ]CIJAS\s+(?:NR|NUMURS))\s*[:\-]?\s*'.$plateCapture.'/u',
         ];
         foreach ($labelPatterns as $pattern) {
             if (preg_match($pattern, $haystack, $m)) {
@@ -500,7 +514,7 @@ final class IncomingFineReplyBuilder
 
         // Brand + plate (Julianus / camera OCR): "SKODA NNO302" / "KIA MRH986".
         if (preg_match(
-            '/\b(?:AUDI|BMW|KIA|VW|VOLKSWAGEN|TOYOTA|SKODA|ŠKODA|FORD|OPEL|PEUGEOT|RENAULT|HYUNDAI|NISSAN|MAZDA|TESLA|MERCEDES|VOLVO|DACIA|CITROEN|SEAT|FIAT|HONDA|MITSUBISHI|SUZUKI|JEEP|PORSCHE|MINI|CUPRA)\s+([A-Z]{2,3}[\s\-]?\d{2,4})\b/u',
+            '/\b(?:AUDI|BMW|KIA|VW|VOLKSWAGEN|TOYOTA|SKODA|ŠKODA|FORD|OPEL|PEUGEOT|RENAULT|HYUNDAI|NISSAN|MAZDA|TESLA|MERCEDES|VOLVO|DACIA|CITROEN|SEAT|FIAT|HONDA|MITSUBISHI|SUZUKI|JEEP|PORSCHE|MINI|CUPRA)\s+('.self::PLATE_BODY.')\b/u',
             $haystack,
             $m
         )) {
@@ -511,16 +525,16 @@ final class IncomingFineReplyBuilder
         }
 
         // Plate glued to date: "MRH986;2026-08-15" / "NNO302;2026-09-30".
-        if (preg_match('/\b([A-Z]{2,3}\d{2,4})\s*;\s*20\d{2}/u', $haystack, $m)
+        if (preg_match('/\b('.self::PLATE_BODY.')\s*;\s*20\d{2}/u', $haystack, $m)
             && ! $this->isFalsePositivePlate($m[1])) {
             return $m[1];
         }
 
-        if (preg_match('/\b([A-Z]{3}\d{3})\b/', $haystack, $m) && ! $this->isFalsePositivePlate($m[1])) {
+        if (preg_match('/\b('.self::PLATE_BODY.')\b/', $haystack, $m) && ! $this->isFalsePositivePlate($m[1])) {
             return $m[1];
         }
 
-        if (preg_match_all('/\b([A-Z]{2,3}[\s-]?\d{2,4})\b/', $haystack, $matches, PREG_OFFSET_CAPTURE)) {
+        if (preg_match_all('/\b('.self::PLATE_BODY.'|[A-Z]{2,3}[\s-]?\d{2,4})\b/', $haystack, $matches, PREG_OFFSET_CAPTURE)) {
             foreach ($matches[0] as $idx => $full) {
                 $raw = $matches[1][$idx][0];
                 $offset = (int) $full[1];
@@ -532,7 +546,8 @@ final class IncomingFineReplyBuilder
                 $before = strtolower(substr($haystack, max(0, $offset - 48), 48));
                 if (str_contains($before, 'nr.') || str_contains($before, 'isakym') || str_contains($before, 'nutarim')
                     || str_contains($before, 'kodas') || str_contains($before, 'unipark')
-                    || str_contains($before, 're:')) {
+                    || str_contains($before, 're:') || str_contains($before, 'sumok')
+                    || preg_match('/\biki\s*$/u', $before)) {
                     continue;
                 }
                 $plate = preg_replace('/[\s-]+/', '', $raw) ?? $raw;
@@ -559,8 +574,13 @@ final class IncomingFineReplyBuilder
             return true;
         }
 
-        // Typical LT/LV plates: ABC123 / AB1234 — reject shorter junk (IO20, etc.).
-        if (! preg_match('/^([A-Z]{3}\d{2,4}|[A-Z]{2}\d{3,4})$/', $plate)) {
+        // "Sumokėti iki 2026…" → IKI2026 is not a plate.
+        if (preg_match('/^IKI(19|20)\d{2}$/', $plate)) {
+            return true;
+        }
+
+        // Typical LT/LV plates: ABC123 / AB1234 / ABC1DE — reject shorter junk (IO20, etc.).
+        if (! preg_match('/^([A-Z]{3}\d{2,4}|[A-Z]{2}\d{3,4}|[A-Z]{3}\d[A-Z]{2})$/', $plate)) {
             return true;
         }
 

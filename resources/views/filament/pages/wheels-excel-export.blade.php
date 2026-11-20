@@ -103,43 +103,102 @@
         </p>
     </div>
 
+    @include('filament.partials.vio-multi-select-assets')
+    @php
+        $fileFilterValues = array_values(array_map('strval', $fileFilters));
+        $statusFilterValues = array_values(array_map('strval', $statusFilters));
+        $fileOptionsJson = \Illuminate\Support\Js::from(
+            collect($this->fileMultiSelectOptions)->map(fn ($label, $value) => ['value' => (string) $value, 'label' => (string) $label])->values()->all()
+        );
+        $statusOptionsJson = \Illuminate\Support\Js::from(
+            collect($this->statusMultiSelectOptions)->map(fn ($label, $value) => ['value' => (string) $value, 'label' => (string) $label])->values()->all()
+        );
+        $filtersActive = $fileFilterValues !== [] || $statusFilterValues !== [];
+    @endphp
     <div class="mb-4 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <label class="block min-w-[14rem] flex-1 text-sm">
+        <div class="block min-w-[16rem] flex-1 text-sm">
             <span class="text-xs font-semibold uppercase tracking-wide text-slate-500">Import file</span>
-            <input
-                type="search"
-                wire:model.live.debounce.300ms="fileFilterQuery"
-                placeholder="Search file…"
-                class="mt-1.5 w-full rounded-lg border-slate-300 text-sm shadow-sm"
-                style="padding: 8px 12px;"
+            <div
+                class="vio-ms mt-1.5"
+                wire:key="file-filter-{{ md5(json_encode($fileFilterValues)) }}"
+                x-data="vioMultiSelect({
+                    options: {{ $fileOptionsJson }},
+                    selected: @js($fileFilterValues),
+                    placeholder: 'All import files',
+                    onChange(values) { $wire.set('fileFilters', values) }
+                })"
+                @click.outside="open = false"
             >
-            <select
-                wire:model.live="fileFilter"
-                class="mt-1.5 w-full rounded-lg border-slate-300 text-sm shadow-sm"
-                style="padding: 10px 12px;"
-            >
-                @foreach ($this->filteredFileFilterOptions as $value => $label)
-                    <option value="{{ $value }}">{{ $label }}</option>
-                @endforeach
-            </select>
-        </label>
-        <label class="block min-w-[11rem] text-sm">
+                <button type="button" class="vio-ms-control" @click="open = !open; if (open) $nextTick(() => $refs.q.focus())">
+                    <template x-if="selected.length === 0">
+                        <span class="vio-ms-placeholder" x-text="placeholder"></span>
+                    </template>
+                    <template x-for="val in selected" :key="val">
+                        <span class="vio-ms-chip">
+                            <span x-text="labelFor(val)"></span>
+                            <button type="button" class="vio-ms-chip-x" @click.stop="toggle(val)">×</button>
+                        </span>
+                    </template>
+                    <span class="vio-ms-caret">▾</span>
+                </button>
+                <div class="vio-ms-panel" x-show="open" x-cloak>
+                    <input type="search" class="vio-ms-search" x-ref="q" x-model="query" placeholder="Search file…" @keydown.escape.stop="open = false" />
+                    <ul class="vio-ms-list">
+                        <template x-for="opt in filtered" :key="opt.value">
+                            <li>
+                                <button type="button" class="vio-ms-option" :class="{ 'is-on': selected.includes(opt.value) }" @click="toggle(opt.value)">
+                                    <span x-text="opt.label"></span>
+                                    <span class="vio-ms-check" x-show="selected.includes(opt.value)">✓</span>
+                                </button>
+                            </li>
+                        </template>
+                        <li x-show="filtered.length === 0" class="vio-ms-empty">No matches</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <div class="block min-w-[14rem] text-sm">
             <span class="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</span>
-            <select
-                wire:model.live="statusFilter"
-                class="mt-1.5 w-full rounded-lg border-slate-300 text-sm shadow-sm"
-                style="padding: 10px 12px;"
+            <div
+                class="vio-ms mt-1.5"
+                wire:key="status-filter-{{ md5(json_encode($statusFilterValues)) }}"
+                x-data="vioMultiSelect({
+                    options: {{ $statusOptionsJson }},
+                    selected: @js($statusFilterValues),
+                    placeholder: {{ \Illuminate\Support\Js::from($showImported ? 'All statuses' : 'Any unimported') }},
+                    onChange(values) { $wire.set('statusFilters', values) }
+                })"
+                @click.outside="open = false"
             >
-                <option value="">{{ $showImported ? 'All statuses' : 'Any unimported' }}</option>
-                <option value="ready">Ready</option>
-                <option value="prepared">In import file</option>
-                <option value="missing">Missing in Wheels</option>
-                @if ($showImported)
-                    <option value="imported">In Wheels</option>
-                @endif
-            </select>
-        </label>
-        @if ($fileFilter !== '' || $statusFilter !== '' || $fileFilterQuery !== '')
+                <button type="button" class="vio-ms-control" @click="open = !open; if (open) $nextTick(() => $refs.q.focus())">
+                    <template x-if="selected.length === 0">
+                        <span class="vio-ms-placeholder" x-text="placeholder"></span>
+                    </template>
+                    <template x-for="val in selected" :key="val">
+                        <span class="vio-ms-chip">
+                            <span x-text="labelFor(val)"></span>
+                            <button type="button" class="vio-ms-chip-x" @click.stop="toggle(val)">×</button>
+                        </span>
+                    </template>
+                    <span class="vio-ms-caret">▾</span>
+                </button>
+                <div class="vio-ms-panel" x-show="open" x-cloak>
+                    <input type="search" class="vio-ms-search" x-ref="q" x-model="query" placeholder="Search…" @keydown.escape.stop="open = false" />
+                    <ul class="vio-ms-list">
+                        <template x-for="opt in filtered" :key="opt.value">
+                            <li>
+                                <button type="button" class="vio-ms-option" :class="{ 'is-on': selected.includes(opt.value) }" @click="toggle(opt.value)">
+                                    <span x-text="opt.label"></span>
+                                    <span class="vio-ms-check" x-show="selected.includes(opt.value)">✓</span>
+                                </button>
+                            </li>
+                        </template>
+                        <li x-show="filtered.length === 0" class="vio-ms-empty">No matches</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        @if ($filtersActive)
             <x-filament::button size="sm" color="gray" wire:click="clearFilters">Clear filters</x-filament::button>
         @endif
         <div class="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 pb-1 text-xs text-slate-500">

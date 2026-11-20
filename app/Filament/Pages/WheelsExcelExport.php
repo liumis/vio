@@ -31,14 +31,19 @@ class WheelsExcelExport extends Page
     /** @var list<int|string> */
     public array $selectedIds = [];
 
-    /** Filter by import file batch (empty = all). */
-    public string $fileFilter = '';
+    /**
+     * Filter by import file batch keys (empty = all).
+     *
+     * @var list<string>
+     */
+    public array $fileFilters = [];
 
-    /** Client-side-ish search for the import-file dropdown. */
-    public string $fileFilterQuery = '';
-
-    /** ready | prepared | imported | missing | '' */
-    public string $statusFilter = '';
+    /**
+     * ready | prepared | imported | missing (empty = any / unimported mode).
+     *
+     * @var list<string>
+     */
+    public array $statusFilters = [];
 
     /** When false (default), hide fines already In Wheels. */
     public bool $showImported = false;
@@ -64,9 +69,8 @@ class WheelsExcelExport extends Page
     public function mount(): void
     {
         $this->selectedIds = [];
-        $this->fileFilter = '';
-        $this->fileFilterQuery = '';
-        $this->statusFilter = '';
+        $this->fileFilters = [];
+        $this->statusFilters = [];
         $this->showImported = false;
         $this->showImportPicker = false;
         $this->importPickerBatch = '';
@@ -75,26 +79,37 @@ class WheelsExcelExport extends Page
         $this->openBatches = ['__new__'];
     }
 
-    public function updatedFileFilter(): void
+    public function updatedFileFilters(): void
     {
         $this->selectedIds = [];
-        if ($this->fileFilter !== '') {
-            $this->openBatches = [$this->fileFilter];
+        $this->fileFilters = array_values(array_filter(array_map('strval', $this->fileFilters)));
+        if ($this->fileFilters !== []) {
+            $this->openBatches = $this->fileFilters;
         } elseif (! in_array('__new__', $this->openBatches, true)) {
             $this->openBatches = ['__new__'];
         }
     }
 
-    public function updatedStatusFilter(): void
+    public function updatedStatusFilters(): void
     {
         $this->selectedIds = [];
+        $this->statusFilters = array_values(array_filter(array_map('strval', $this->statusFilters)));
+        if (! $this->showImported) {
+            $this->statusFilters = array_values(array_filter(
+                $this->statusFilters,
+                static fn (string $s): bool => $s !== 'imported'
+            ));
+        }
     }
 
     public function updatedShowImported(): void
     {
         $this->selectedIds = [];
-        if (! $this->showImported && $this->statusFilter === 'imported') {
-            $this->statusFilter = '';
+        if (! $this->showImported) {
+            $this->statusFilters = array_values(array_filter(
+                $this->statusFilters,
+                static fn (string $s): bool => $s !== 'imported'
+            ));
         }
     }
 
@@ -107,9 +122,10 @@ class WheelsExcelExport extends Page
     public function showUnimportedOnly(): void
     {
         $this->showImported = false;
-        if ($this->statusFilter === 'imported') {
-            $this->statusFilter = '';
-        }
+        $this->statusFilters = array_values(array_filter(
+            $this->statusFilters,
+            static fn (string $s): bool => $s !== 'imported'
+        ));
         $this->selectedIds = [];
     }
 
@@ -139,37 +155,41 @@ class WheelsExcelExport extends Page
 
     public function clearFilters(): void
     {
-        $this->fileFilter = '';
-        $this->fileFilterQuery = '';
-        $this->statusFilter = '';
+        $this->fileFilters = [];
+        $this->statusFilters = [];
         // Keep showImported as the user left it — only clear file/status picks.
         $this->selectedIds = [];
+        $this->openBatches = ['__new__'];
+    }
+
+    /**
+     * Options for the Import file multi-select (no "All" row — empty selection = all).
+     *
+     * @return array<string, string>
+     */
+    public function getFileMultiSelectOptionsProperty(): array
+    {
+        $options = $this->fileFilterOptions;
+        unset($options['']);
+
+        return $options;
     }
 
     /**
      * @return array<string, string>
      */
-    public function getFilteredFileFilterOptionsProperty(): array
+    public function getStatusMultiSelectOptionsProperty(): array
     {
-        $options = $this->fileFilterOptions;
-        $q = trim(mb_strtolower($this->fileFilterQuery));
-        if ($q === '') {
-            return $options;
+        $options = [
+            'ready' => 'Ready',
+            'prepared' => 'In import file',
+            'missing' => 'Missing in Wheels',
+        ];
+        if ($this->showImported) {
+            $options['imported'] = 'In Wheels';
         }
 
-        $filtered = array_filter(
-            $options,
-            static function (string $label, string $value) use ($q): bool {
-                if ($value === '') {
-                    return true;
-                }
-
-                return str_contains(mb_strtolower($label), $q);
-            },
-            ARRAY_FILTER_USE_BOTH
-        );
-
-        return $filtered !== [] ? $filtered : ['' => 'All import files'];
+        return $options;
     }
 
     /**
@@ -207,28 +227,39 @@ class WheelsExcelExport extends Page
             ->where('driver_name', '!=', '')
             ->where(function ($q): void {
                 $q->whereNull('wheels_export_status')
-                    ->orWhere('wheels_export_status', '!=', FineProcessLog::WHEELS_EXPORT_SKIPPED);
+                    ->orWhereNotIn('wheels_export_status', [
+                        FineProcessLog::WHEELS_EXPORT_SKIPPED,
+                        FineProcessLog::WHEELS_EXPORT_NEEDS_REVIEW,
+                    ]);
             });
 
-        if ($this->fileFilter !== '') {
-            $query->where('wheels_export_batch', $this->fileFilter);
+        if ($this->fileFilters !== []) {
+            $query->whereIn('wheels_export_batch', $this->fileFilters);
         }
 
-        if ($this->statusFilter === 'ready') {
-            $query->where(function ($q): void {
-                $q->whereNull('wheels_export_status')
-                    ->orWhere('wheels_export_status', FineProcessLog::WHEELS_EXPORT_PENDING);
+        if ($this->statusFilters !== []) {
+            $query->where(function ($outer) {
+                foreach ($this->statusFilters as $status) {
+                    $outer->orWhere(function ($q) use ($status): void {
+                        if ($status === 'ready') {
+                            $q->where(function ($inner): void {
+                                $inner->whereNull('wheels_export_status')
+                                    ->orWhere('wheels_export_status', FineProcessLog::WHEELS_EXPORT_PENDING);
+                            });
+                        } elseif ($status === 'prepared') {
+                            $q->where('wheels_export_status', FineProcessLog::WHEELS_EXPORT_EXPORTED)
+                                ->where(function ($inner): void {
+                                    $inner->whereNull('wheels_import_status')
+                                        ->orWhere('wheels_import_status', FineProcessLog::WHEELS_IMPORT_AWAITING);
+                                });
+                        } elseif ($status === 'missing') {
+                            $q->where('wheels_import_status', FineProcessLog::WHEELS_IMPORT_MISSING);
+                        } elseif ($status === 'imported') {
+                            $q->where('wheels_import_status', FineProcessLog::WHEELS_IMPORT_IMPORTED);
+                        }
+                    });
+                }
             });
-        } elseif ($this->statusFilter === 'prepared') {
-            $query->where('wheels_export_status', FineProcessLog::WHEELS_EXPORT_EXPORTED)
-                ->where(function ($q): void {
-                    $q->whereNull('wheels_import_status')
-                        ->orWhere('wheels_import_status', FineProcessLog::WHEELS_IMPORT_AWAITING);
-                });
-        } elseif ($this->statusFilter === 'missing') {
-            $query->where('wheels_import_status', FineProcessLog::WHEELS_IMPORT_MISSING);
-        } elseif ($this->statusFilter === 'imported') {
-            $query->where('wheels_import_status', FineProcessLog::WHEELS_IMPORT_IMPORTED);
         } elseif (! $this->showImported) {
             $query->where(function ($q): void {
                 $q->whereNull('wheels_import_status')
@@ -298,7 +329,7 @@ class WheelsExcelExport extends Page
 
         $groups = [];
         // Always show "New" on top unless filtering a specific import file.
-        if ($this->fileFilter === '') {
+        if ($this->fileFilters === []) {
             $groups[] = [
                 'key' => '__new__',
                 'title' => 'New · not in a file yet',
@@ -527,8 +558,9 @@ class WheelsExcelExport extends Page
         @unlink($result['path']);
 
         $this->selectedIds = [];
-        $this->fileFilter = (string) $result['batch'];
-        $this->statusFilter = 'prepared';
+        $this->fileFilters = [(string) $result['batch']];
+        $this->statusFilters = ['prepared'];
+        $this->openBatches = $this->fileFilters;
 
         Notification::make()
             ->success()
@@ -565,7 +597,7 @@ class WheelsExcelExport extends Page
             return;
         }
 
-        $preselect = $this->fileFilter;
+        $preselect = $this->fileFilters[0] ?? '';
         if ($preselect === '') {
             $ids = array_values(array_filter(array_map('intval', $this->selectedIds)));
             if ($ids !== []) {
@@ -763,7 +795,8 @@ class WheelsExcelExport extends Page
         // This action only prepares the Excel download.
 
         $this->showImportPicker = false;
-        $this->fileFilter = $this->importPickerBatch;
+        $this->fileFilters = $this->importPickerBatch !== '' ? [$this->importPickerBatch] : [];
+        $this->openBatches = $this->fileFilters !== [] ? $this->fileFilters : ['__new__'];
 
         $autoUser = EmailSetting::wheelsysConfig()['username'];
         Notification::make()
@@ -812,8 +845,8 @@ class WheelsExcelExport extends Page
 
         if ($ids !== []) {
             $query->whereIn('id', $ids);
-        } elseif ($this->fileFilter !== '') {
-            $query->where('wheels_export_batch', $this->fileFilter);
+        } elseif ($this->fileFilters !== []) {
+            $query->whereIn('wheels_export_batch', $this->fileFilters);
         }
 
         $logs = $query->orderBy('id')->limit(100)->get();

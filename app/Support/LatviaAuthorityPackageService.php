@@ -287,6 +287,12 @@ final class LatviaAuthorityPackageService
             'processed_by' => $log->processed_by ?? Auth::id(),
         ])->save();
 
+        try {
+            app(IncomingFineMailboxFolders::class)->moveToProcessed($log->fresh());
+        } catch (\Throwable) {
+            // Non-fatal — package already sent.
+        }
+
         return [
             'to' => self::TO_EMAIL,
             'attachments' => count($attachments),

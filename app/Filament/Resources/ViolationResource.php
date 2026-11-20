@@ -18,6 +18,7 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Throwable;
 
 /**
@@ -81,6 +82,11 @@ class ViolationResource extends Resource
                         default => 'gray',
                     })
                     ->sortable(),
+                Tables\Columns\ViewColumn::make('mail_preview')
+                    ->label('')
+                    ->view('filament.tables.columns.mail-preview-icon')
+                    ->alignCenter()
+                    ->width('3rem'),
                 Tables\Columns\TextColumn::make('vehicle')
                     ->label('Vehicle')
                     ->searchable()
@@ -133,12 +139,6 @@ class ViolationResource extends Resource
                         ? 'Open in Wheelsys'
                         : null)
                     ->toggleable(),
-                Tables\Columns\TextColumn::make('wheels_export_batch')
-                    ->label('Batch')
-                    ->fontFamily('mono')
-                    ->size('sm')
-                    ->toggleable()
-                    ->placeholder('—'),
                 Tables\Columns\TextColumn::make('wheels_verify_detail')
                     ->label('Detail')
                     ->wrap()
@@ -219,106 +219,17 @@ class ViolationResource extends Resource
                 Tables\Actions\Action::make('openSharePoint')
                     ->label('Document')
                     ->icon('heroicon-o-document-text')
+                    ->iconButton()
                     ->url(fn (FineProcessLog $record): ?string => $record->documentSharePointUrl())
                     ->openUrlInNewTab()
                     ->visible(fn (FineProcessLog $record): bool => filled($record->documentSharePointUrl()))
-                    ->tooltip('Fine PDF on SharePoint'),
-                Tables\Actions\Action::make('sendAuthorityReply')
-                    ->label('Send reply')
-                    ->icon('heroicon-o-envelope')
-                    ->color(fn (FineProcessLog $record): string => FineReplyReadiness::forLog($record)['ready'] ? 'success' : 'warning')
-                    ->visible(function (FineProcessLog $record): bool {
-                        if (filled($record->email_sent_at)) {
-                            return false;
-                        }
-                        $info = FineReplyReadiness::forLog($record);
-
-                        return $info['channel'] !== 'epaslaugos';
-                    })
-                    ->modalHeading(fn (FineProcessLog $record): string => 'Send authority reply · '.($record->reference ?: $record->vehicle ?: '#'.$record->id))
-                    ->modalDescription('Pulls driver details from Wheelsys when possible. Green Reply bubble = required template fields present.')
-                    ->modalSubmitActionLabel('Send')
-                    ->fillForm(function (FineProcessLog $record): array {
-                        $wheelsys = FineReplyReadiness::enrichAndStore($record);
-                        try {
-                            $draft = app(IncomingFineReplyBuilder::class)->buildForProcessLog($record->fresh(), $wheelsys);
-                        } catch (Throwable $e) {
-                            return [
-                                'to' => '',
-                                'subject' => trim(($record->reference ?? '').' '.($record->vehicle ?? '')),
-                                'body_text' => '',
-                                'readiness_note' => 'Draft build failed: '.$e->getMessage(),
-                            ];
-                        }
-
-                        $info = FineReplyReadiness::forLog($record->fresh(), $wheelsys);
-
-                        return [
-                            'to' => $draft['to'] ?? '',
-                            'subject' => $draft['subject'] ?? '',
-                            'body_text' => $draft['body_text'] ?? '',
-                            'readiness_note' => $info['detail'],
-                        ];
-                    })
-                    ->form([
-                        Forms\Components\TextInput::make('readiness_note')
-                            ->label('Validation')
-                            ->disabled()
-                            ->dehydrated(false),
-                        Forms\Components\TextInput::make('to')
-                            ->label('To')
-                            ->required()
-                            ->email(),
-                        Forms\Components\TextInput::make('subject')
-                            ->label('Subject')
-                            ->required()
-                            ->maxLength(255),
-                        Forms\Components\Textarea::make('body_text')
-                            ->label('Laiško tekstas')
-                            ->rows(10)
-                            ->required(),
-                    ])
-                    ->action(function (FineProcessLog $record, array $data): void {
-                        try {
-                            $wheelsys = FineReplyReadiness::enrichAndStore($record);
-                            $draft = app(IncomingFineReplyBuilder::class)->buildForProcessLog($record->fresh(), $wheelsys);
-                            $draft['to'] = trim((string) ($data['to'] ?? ''));
-                            $draft['subject'] = trim((string) ($data['subject'] ?? ''));
-                            $draft['body_text'] = (string) ($data['body_text'] ?? '');
-                            $draft = app(IncomingFineReplyBuilder::class)->refreshHtml($draft);
-
-                            $log = app(IncomingFineReplySender::class)->send($draft, $record);
-
-                            $workflow = is_array($log->workflow) ? $log->workflow : [];
-                            $workflow['wheelsys'] = $wheelsys;
-                            if (is_array($workflow['steps'] ?? null)) {
-                                $workflow['steps'][] = [
-                                    'key' => 'authority_reply',
-                                    'ok' => true,
-                                    'detail' => 'Sent to '.$draft['to'],
-                                ];
-                            }
-                            $log->fill(['workflow' => $workflow])->save();
-
-                            Notification::make()
-                                ->success()
-                                ->title('Authority reply sent')
-                                ->body($draft['to'].' · '.$draft['subject'])
-                                ->persistent()
-                                ->send();
-                        } catch (Throwable $e) {
-                            Notification::make()
-                                ->danger()
-                                ->title('Send failed')
-                                ->body($e->getMessage())
-                                ->persistent()
-                                ->send();
-                        }
-                    }),
+                    ->tooltip('Document · Fine PDF on SharePoint'),
                 Tables\Actions\Action::make('chargeFailed')
                     ->label('Nepavyko nuskaičiuoti')
                     ->icon('heroicon-o-banknotes')
+                    ->iconButton()
                     ->color('danger')
+                    ->tooltip('Nepavyko nuskaičiuoti')
                     ->modalHeading('IV · Veiksmai po nepavykusio nuskaičiavimo')
                     ->modalDescription('Sugeneruos dvikalbį pranešimą (Priedas Nr. 3), įkels į MarkSign ir nusiųs pasirašyti Mykolui.')
                     ->modalSubmitActionLabel('Generuoti + MarkSign')
@@ -400,14 +311,18 @@ class ViolationResource extends Resource
                 Tables\Actions\Action::make('openMarksign')
                     ->label('MarkSign link')
                     ->icon('heroicon-o-link')
+                    ->iconButton()
                     ->url(fn (FineProcessLog $record): ?string => $record->marksign_signing_url)
                     ->openUrlInNewTab()
                     ->visible(fn (FineProcessLog $record): bool => filled($record->marksign_signing_url))
-                    ->color('warning'),
+                    ->color('warning')
+                    ->tooltip('MarkSign link'),
                 Tables\Actions\Action::make('registerLtDebt')
                     ->label('Registruoti LT debt')
                     ->icon('heroicon-o-table-cells')
+                    ->iconButton()
                     ->color('success')
+                    ->tooltip('Registruoti LT debt')
                     ->visible(fn (FineProcessLog $record): bool => filled($record->chargeback_status)
                         && $record->chargeback_status !== FineProcessLog::CHARGEBACK_NOTICE_SENT)
                     ->modalHeading('Registruoti CHARGEBACKS/DEBTS → LT debt')
@@ -455,15 +370,87 @@ class ViolationResource extends Resource
                 Tables\Actions\Action::make('openDebtTracker')
                     ->label('LT debt failas')
                     ->icon('heroicon-o-arrow-top-right-on-square')
+                    ->iconButton()
                     ->url(fn (): ?string => DebtTrackerService::config()['sharepoint_url']
                         ?: DebtTrackerService::config()['google_url']
                         ?: null)
                     ->openUrlInNewTab()
                     ->visible(fn (): bool => filled(DebtTrackerService::config()['sharepoint_url'])
                         || filled(DebtTrackerService::config()['google_url']))
-                    ->color('gray'),
+                    ->color('gray')
+                    ->tooltip('LT debt failas'),
             ])
-            ->bulkActions([])
+            ->bulkActions([
+                Tables\Actions\BulkActionGroup::make([
+                    Tables\Actions\BulkAction::make('sendReadyReplies')
+                        ->label('Send replies (ready only)')
+                        ->icon('heroicon-o-paper-airplane')
+                        ->color('success')
+                        ->requiresConfirmation()
+                        ->modalHeading('Bulk send authority replies')
+                        ->modalDescription('Sends only rows with a green Reply bubble (full driver/template info). Skips Missing, Sent, and ePaslaugos.')
+                        ->modalSubmitActionLabel('Send ready')
+                        ->deselectRecordsAfterCompletion()
+                        ->action(function (Collection $records): void {
+                            $sent = 0;
+                            $skipped = 0;
+                            $failed = 0;
+
+                            foreach ($records as $record) {
+                                if (! $record instanceof FineProcessLog) {
+                                    $skipped++;
+                                    continue;
+                                }
+
+                                $wheelsys = FineReplyReadiness::enrichAndStore($record);
+                                $info = FineReplyReadiness::forLog($record->fresh(), $wheelsys);
+
+                                if ($info['sent'] || ! $info['ready'] || $info['channel'] === 'epaslaugos') {
+                                    $skipped++;
+                                    continue;
+                                }
+
+                                try {
+                                    $draft = app(IncomingFineReplyBuilder::class)
+                                        ->buildForProcessLog($record->fresh(), $wheelsys);
+                                    if (($draft['reply_channel'] ?? '') === 'epaslaugos') {
+                                        $skipped++;
+                                        continue;
+                                    }
+                                    if (! empty($draft['missing_fields'])) {
+                                        $skipped++;
+                                        continue;
+                                    }
+
+                                    $log = app(IncomingFineReplySender::class)->send($draft, $record);
+                                    $workflow = is_array($log->workflow) ? $log->workflow : [];
+                                    $workflow['wheelsys'] = $wheelsys;
+                                    $workflow['steps'] = array_values(array_merge(
+                                        is_array($workflow['steps'] ?? null) ? $workflow['steps'] : [],
+                                        [['key' => 'authority_reply', 'ok' => true, 'detail' => 'Bulk sent to '.$draft['to']]]
+                                    ));
+                                    $log->fill(['workflow' => $workflow])->save();
+                                    $sent++;
+                                } catch (Throwable) {
+                                    $failed++;
+                                }
+                            }
+
+                            $notification = Notification::make()
+                                ->title('Bulk send finished')
+                                ->body("Sent {$sent} · skipped {$skipped} · failed {$failed}");
+
+                            if ($sent > 0 && $failed === 0) {
+                                $notification->success();
+                            } elseif ($sent > 0) {
+                                $notification->warning();
+                            } else {
+                                $notification->danger();
+                            }
+                            $notification->send();
+                        }),
+                ]),
+            ])
             ->emptyStateHeading('No Wheelsys import fines yet')
             ->emptyStateDescription('Prepare a file in Wheelsys import, import in Wheelsys, then Update Wheelsys status.');
     }

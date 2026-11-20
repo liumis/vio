@@ -57,7 +57,7 @@ final class MicrosoftGraphInbox
     }
 
     /**
-     * Inbox-only fine mailbox listing (VIO tracks handled state in DB — no folder moves).
+     * Inbox-only fine mailbox listing (handled mail is moved to "VIO pending" / "VIO processed").
      *
      * @return list<array{
      *     id: string,

@@ -44,6 +44,20 @@ class IncomingFineVehicleExtractTest extends TestCase
         $this->assertSame('ABC123', $this->builder->extractVehicle('Judu', $text));
     }
 
+    public function test_extracts_judu_plate_from_subject_parentheses(): void
+    {
+        $subject = 'JUDU: Dėl nesumokėtos rinkliavos. Pranešimo Nr. A1429299 (CAV1AR)';
+        $text = "Laikas 2026-11-19 13:41\nPranešimo Nr.A1429299\nValstybinis Nr.CAV1AR\nSumokėti iki 2026-11-26 23:59";
+        $this->assertSame('CAV1AR', $this->builder->extractVehicle($subject, $text));
+    }
+
+    public function test_judu_does_not_treat_sumoketi_iki_year_as_plate(): void
+    {
+        $text = "Laikas 2026-11-19 13:41\nPranešimo Nr.A1429299\nValstybinis Nr.CAV1AR\nSumokėti iki 2026-11-26 23:59";
+        $this->assertSame('CAV1AR', $this->builder->extractVehicle('JUDU notice', $text));
+        $this->assertNotSame('IKI2026', $this->builder->extractVehicle('JUDU notice', $text));
+    }
+
     public function test_extracts_latvian_registration_label(): void
     {
         $text = "Transportlīdzekļa reģistrācijas Nr.: MAB841\nLēmums PZ00160267";

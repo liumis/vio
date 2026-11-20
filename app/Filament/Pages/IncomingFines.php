@@ -7,6 +7,7 @@ use App\Models\EmailSetting;
 use App\Models\FineProcessLog;
 use App\Support\EpaslaugosAssist;
 use App\Support\IncomingFineLookup;
+use App\Support\IncomingFineMailboxFolders;
 use App\Support\IncomingFineMailScanner;
 use App\Support\IncomingFineReplyBuilder;
 use App\Support\IncomingFineReplySender;
@@ -139,14 +140,13 @@ class IncomingFines extends Page implements HasForms
                     ->numeric()
                     ->minValue(1)
                     ->maxValue(180)
-                    ->required()
-                    ->helperText('Inbox only. Already-handled rows show as Already have. Wheelsys login: Settings → System settings.'),
+                    ->required(),
             ])
             ->statePath('data');
     }
 
     /**
-     * @return array<string|int, string>
+     * @return array<string, string>
      */
     public function getAuthorityFilterOptionsProperty(): array
     {
@@ -155,7 +155,12 @@ class IncomingFines extends Page implements HasForms
             ->pluck('name', 'id')
             ->all();
 
-        return ['' => 'All authorities', 'unmatched' => 'Unmatched (—)'] + $options;
+        $mapped = [];
+        foreach ($options as $id => $name) {
+            $mapped[(string) $id] = (string) $name;
+        }
+
+        return ['unmatched' => 'Unmatched (—)'] + $mapped;
     }
 
     /**
@@ -181,6 +186,9 @@ class IncomingFines extends Page implements HasForms
         if (! empty($row['in_vio']) && $lookup === 'found') {
             return 'already_have_found';
         }
+        if ($lookup === 'needs_review') {
+            return 'needs_review';
+        }
         if ($lookup === 'not_found') {
             return 'not_found';
         }
@@ -200,8 +208,8 @@ class IncomingFines extends Page implements HasForms
     public function getStatusFilterOptionsProperty(): array
     {
         return [
-            '' => 'All statuses',
             'new' => 'New',
+            'needs_review' => 'Needs review · multi driver',
             'not_found' => 'Not found · retry',
             'found' => 'Found',
             'already_have' => 'Already have',
@@ -213,8 +221,8 @@ class IncomingFines extends Page implements HasForms
 
     public function clearListFilters(): void
     {
-        $this->data['authority_id'] = null;
-        $this->data['status'] = null;
+        $this->data['authority_ids'] = [];
+        $this->data['statuses'] = [];
         $this->statusSort = '';
     }
 
@@ -242,40 +250,51 @@ class IncomingFines extends Page implements HasForms
     {
         $rows = $this->results;
 
-        $authority = $this->data['authority_id'] ?? null;
-        if ($authority !== null && $authority !== '') {
-            // Keep original keys so process() indexes stay valid.
-            if ($authority === 'unmatched') {
-                $rows = array_filter(
-                    $rows,
-                    static fn (array $row): bool => empty($row['authority_id'])
-                );
-            } else {
-                $id = (int) $authority;
-                $rows = array_filter(
-                    $rows,
-                    static fn (array $row): bool => (int) ($row['authority_id'] ?? 0) === $id
-                );
-            }
-        }
-
-        $status = $this->data['status'] ?? null;
-        if ($status !== null && $status !== '') {
+        // Keep original keys so process() indexes stay valid.
+        $authorityIds = array_values(array_filter(
+            array_map('strval', (array) ($this->data['authority_ids'] ?? [])),
+            static fn (string $v): bool => $v !== ''
+        ));
+        if ($authorityIds !== []) {
             $rows = array_filter(
                 $rows,
-                fn (array $row): bool => $this->rowStatusKey($row) === $status
+                static function (array $row) use ($authorityIds): bool {
+                    $rowId = $row['authority_id'] ?? null;
+                    foreach ($authorityIds as $selected) {
+                        if ($selected === 'unmatched' && empty($rowId)) {
+                            return true;
+                        }
+                        if ($selected !== 'unmatched' && (string) (int) $rowId === (string) (int) $selected && filled($rowId)) {
+                            return true;
+                        }
+                    }
+
+                    return false;
+                }
+            );
+        }
+
+        $statuses = array_values(array_filter(
+            array_map('strval', (array) ($this->data['statuses'] ?? [])),
+            static fn (string $v): bool => $v !== ''
+        ));
+        if ($statuses !== []) {
+            $rows = array_filter(
+                $rows,
+                fn (array $row): bool => in_array($this->rowStatusKey($row), $statuses, true)
             );
         }
 
         if ($this->statusSort === 'asc' || $this->statusSort === 'desc') {
             $order = [
                 'new' => 1,
-                'not_found' => 2,
-                'found' => 3,
-                'already_have' => 4,
-                'already_have_found' => 5,
-                'already_have_ready' => 6,
-                'already_have_prepared' => 7,
+                'needs_review' => 2,
+                'not_found' => 3,
+                'found' => 4,
+                'already_have' => 5,
+                'already_have_found' => 6,
+                'already_have_ready' => 7,
+                'already_have_prepared' => 8,
             ];
             $dir = $this->statusSort === 'asc' ? 1 : -1;
             uasort(
@@ -390,7 +409,7 @@ class IncomingFines extends Page implements HasForms
             return true;
         }
 
-        if (($row['lookup_status'] ?? null) === 'not_found') {
+        if (in_array($row['lookup_status'] ?? null, ['not_found', 'needs_review'], true)) {
             return false;
         }
 
@@ -519,6 +538,8 @@ class IncomingFines extends Page implements HasForms
             }
 
             $lookup = match (true) {
+                $log->status === 'lookup_ambiguous'
+                    || $log->wheels_export_status === FineProcessLog::WHEELS_EXPORT_NEEDS_REVIEW => 'needs_review',
                 $log->status === 'lookup_found'
                     || ($log->wheels_export_status === FineProcessLog::WHEELS_EXPORT_PENDING && filled($log->driver_name))
                     || $log->wheels_export_status === FineProcessLog::WHEELS_EXPORT_EXPORTED => 'found',
@@ -533,6 +554,19 @@ class IncomingFines extends Page implements HasForms
                 && filled($log->driver_name);
             $excelExported = $log->wheels_export_status === FineProcessLog::WHEELS_EXPORT_EXPORTED;
 
+            $lookupDetail = $log->error
+                ?: trim(($log->agr_no ? $log->agr_no.' · ' : '').($log->driver_name ?: ''));
+            if ($lookup === 'needs_review') {
+                $ambiguous = is_array($log->workflow['ambiguous_drivers'] ?? null)
+                    ? $log->workflow['ambiguous_drivers']
+                    : [];
+                $lookupDetail = $ambiguous !== []
+                    ? 'Needs review — '.count($ambiguous).' drivers that day ('.implode(', ', $ambiguous).')'
+                    : (is_array($log->workflow['steps'][0] ?? null)
+                        ? (string) ($log->workflow['steps'][0]['detail'] ?? 'Needs review — multiple drivers that day')
+                        : 'Needs review — multiple drivers that day');
+            }
+
             $merged = array_merge($row, [
                 'in_vio' => true,
                 'in_excel_queue' => $inExcelQueue,
@@ -541,9 +575,9 @@ class IncomingFines extends Page implements HasForms
                 'driver_name' => $log->driver_name ?: ($row['driver_name'] ?? ''),
                 'reference' => $log->reference ?: ($row['reference'] ?? ''),
                 'ticket_date' => $log->ticket_date?->format('Y-m-d') ?: ($row['ticket_date'] ?? ''),
+                'ticket_time' => $log->ticket_time ?: ($row['ticket_time'] ?? ''),
                 'lookup_status' => $lookup,
-                'lookup_detail' => $log->error
-                    ?: trim(($log->agr_no ? $log->agr_no.' · ' : '').($log->driver_name ?: '')),
+                'lookup_detail' => $lookupDetail,
                 'excel_exported' => $excelExported,
                 'excel_batch' => $log->wheels_export_batch,
                 'excel_sharepoint_url' => $log->wheels_export_sharepoint_url,
@@ -1210,18 +1244,39 @@ class IncomingFines extends Page implements HasForms
         if (! empty($this->results[$i]['process_log_id']) && $found) {
             $log = FineProcessLog::query()->find((int) $this->results[$i]['process_log_id']);
             if ($log) {
+                $ticketDate = $this->results[$i]['ticket_date'] ?: ($log->ticket_date?->format('Y-m-d'));
+                $ticketTime = trim((string) ($this->results[$i]['ticket_time'] ?? $log->ticket_time ?? ''));
+                // Human resolved a date-only / multi-driver case — default 09:00 for Wheelsys.
+                if ($ticketDate && $ticketTime === '') {
+                    $ticketTime = \App\Support\WheelsysTrafficViolationExcelExporter::DEFAULT_TICKET_TIME;
+                    $this->results[$i]['ticket_time'] = $ticketTime;
+                }
+
+                $workflow = is_array($log->workflow) ? $log->workflow : [];
+                $workflow['ambiguous_drivers'] = [];
+                $workflow['day_driver_outcome'] = 'manual';
+                $workflow['ticket_time_defaulted'] = ($ticketTime === \App\Support\WheelsysTrafficViolationExcelExporter::DEFAULT_TICKET_TIME)
+                    && ! filled($wheelsys['ticket_time'] ?? null);
+
                 $log->fill([
                     'vehicle' => $this->results[$i]['vehicle'] ?: null,
                     'reference' => $this->results[$i]['reference'] ?: null,
-                    'ticket_date' => $this->results[$i]['ticket_date'] ?: null,
+                    'ticket_date' => $ticketDate ?: null,
+                    'ticket_time' => $ticketTime !== '' ? $ticketTime : null,
                     'agr_no' => $wheelsys['agr_no'] ?? null,
+                    'rental_id' => isset($wheelsys['id']) ? (int) $wheelsys['id'] : $log->rental_id,
                     'driver_name' => $wheelsys['driver'] ?? null,
                     'status' => 'lookup_found',
                     'wheels_export_status' => $log->wheels_export_status === FineProcessLog::WHEELS_EXPORT_EXPORTED
                         ? FineProcessLog::WHEELS_EXPORT_EXPORTED
                         : FineProcessLog::WHEELS_EXPORT_PENDING,
+                    'workflow' => $workflow,
                     'error' => null,
                 ])->save();
+
+                $this->results[$i]['in_excel_queue'] = true;
+                $this->results[$i]['wheels_export_status'] = $log->wheels_export_status;
+                $this->results[$i]['selection_locked'] = $this->rowSelectionLocked($this->results[$i]);
 
                 try {
                     app(\App\Support\IncomingFineDocumentArchiver::class)->archive($log->fresh());
@@ -1476,7 +1531,17 @@ class IncomingFines extends Page implements HasForms
                     'atmesti_note' => null,
                 ];
                 $workflow['steps'] = $this->workflowSteps;
-                $log->fill(['workflow' => $workflow])->save();
+                $log->fill([
+                    'workflow' => $workflow,
+                    'email_sent_at' => $log->email_sent_at ?: now(),
+                    'status' => 'epaslaugos_done',
+                ])->save();
+
+                try {
+                    app(IncomingFineMailboxFolders::class)->moveToProcessed($log->fresh());
+                } catch (Throwable) {
+                    // Non-fatal.
+                }
             }
         }
 

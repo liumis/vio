@@ -85,6 +85,13 @@ final class IncomingFineReplySender
             'processed_by' => $log->processed_by ?? auth()->id(),
         ])->save();
 
+        // Authority reply sent → move original notice to "VIO processed".
+        try {
+            app(IncomingFineMailboxFolders::class)->moveToProcessed($log->fresh());
+        } catch (\Throwable) {
+            // Non-fatal — mail already sent.
+        }
+
         return $log;
     }
 

@@ -17,6 +17,7 @@
             </div>
         </template>
     </div>
+    @include('filament.partials.vio-multi-select-assets')
     <style>
         @keyframes vio-spin { to { transform: rotate(360deg); } }
         .vio-busy-overlay {
@@ -259,6 +260,23 @@
             border: 1px solid #e8eef3;
             box-shadow: 0 1px 2px rgba(34,58,78,.04);
         }
+        .vio-toolbar > .min-w-\[12rem\],
+        .vio-toolbar > .fi-btn,
+        .vio-toolbar > button {
+            align-self: flex-end;
+        }
+        /* Match Filament field label+gap so the button sits on the same row as the input. */
+        .vio-toolbar > .fi-btn,
+        .vio-toolbar > button {
+            margin-bottom: 0;
+        }
+        .vio-toolbar-hint {
+            flex: 1 1 100%;
+            margin: 2px 0 0;
+            font-size: 12px;
+            color: #64748b;
+            line-height: 1.4;
+        }
         .vio-empty {
             margin-top: 1.5rem;
             border-radius: 14px;
@@ -302,13 +320,16 @@
     </div>
 
     <form wire:submit="fetch" class="vio-toolbar">
-        <div class="min-w-[12rem] flex-1">
+        <div class="min-w-[12rem] flex-1" style="max-width: 18rem;">
             {{ $this->form }}
         </div>
         <x-filament::button type="submit" icon="heroicon-o-arrow-path" wire:loading.attr="disabled">
             <span wire:loading.remove wire:target="fetch">Fetch fine emails</span>
             <span wire:loading wire:target="fetch">Connecting…</span>
         </x-filament::button>
+        <p class="vio-toolbar-hint">
+            Inbox only. Already-handled rows show as Already have. Wheelsys login: Settings → System settings.
+        </p>
     </form>
 
     @if ($lastError)
@@ -319,40 +340,118 @@
 
     @php
         $filteredResults = $this->filteredResults;
-        $filterActive = filled($data['authority_id'] ?? null) || filled($data['status'] ?? null) || filled($this->statusSort);
+        $authorityIds = array_values(array_filter((array) ($data['authority_ids'] ?? [])));
+        $statusKeys = array_values(array_filter((array) ($data['statuses'] ?? [])));
+        $filterActive = $authorityIds !== [] || $statusKeys !== [] || filled($this->statusSort);
         $statusSortIcon = match ($this->statusSort) {
             'asc' => '↑',
             'desc' => '↓',
             default => '↕',
         };
+        $authorityOptionsJson = \Illuminate\Support\Js::from(
+            collect($this->authorityFilterOptions)->map(fn ($label, $value) => ['value' => (string) $value, 'label' => (string) $label])->values()->all()
+        );
+        $statusOptionsJson = \Illuminate\Support\Js::from(
+            collect($this->statusFilterOptions)->map(fn ($label, $value) => ['value' => (string) $value, 'label' => (string) $label])->values()->all()
+        );
     @endphp
 
     @if (count($results) > 0)
         <div class="mt-5 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <label class="block min-w-[14rem] flex-1 text-sm">
+            <div class="block min-w-[16rem] flex-1 text-sm">
                 <span class="text-xs font-semibold uppercase tracking-wide text-slate-500">Authority</span>
-                <select
-                    wire:model.live="data.authority_id"
-                    class="mt-1.5 w-full rounded-lg border-slate-300 text-sm shadow-sm"
-                    style="padding: 10px 12px;"
+                <div
+                    class="vio-ms mt-1.5"
+                    wire:key="auth-filter-{{ md5(json_encode($authorityIds)) }}"
+                    x-data="vioMultiSelect({
+                        options: {{ $authorityOptionsJson }},
+                        selected: @js($authorityIds),
+                        placeholder: 'All authorities',
+                        onChange(values) { $wire.set('data.authority_ids', values) }
+                    })"
+                    @click.outside="open = false"
                 >
-                    @foreach ($this->authorityFilterOptions as $value => $label)
-                        <option value="{{ $value }}">{{ $label }}</option>
-                    @endforeach
-                </select>
-            </label>
-            <label class="block min-w-[14rem] flex-1 text-sm">
+                    <button type="button" class="vio-ms-control" @click="open = !open; if (open) $nextTick(() => $refs.q.focus())">
+                        <template x-if="selected.length === 0">
+                            <span class="vio-ms-placeholder" x-text="placeholder"></span>
+                        </template>
+                        <template x-for="val in selected" :key="val">
+                            <span class="vio-ms-chip">
+                                <span x-text="labelFor(val)"></span>
+                                <button type="button" class="vio-ms-chip-x" @click.stop="toggle(val)">×</button>
+                            </span>
+                        </template>
+                        <span class="vio-ms-caret">▾</span>
+                    </button>
+                    <div class="vio-ms-panel" x-show="open" x-cloak>
+                        <input type="search" class="vio-ms-search" x-ref="q" x-model="query" placeholder="Search…" @keydown.escape.stop="open = false" />
+                        <ul class="vio-ms-list">
+                            <template x-for="opt in filtered" :key="opt.value">
+                                <li>
+                                    <button
+                                        type="button"
+                                        class="vio-ms-option"
+                                        :class="{ 'is-on': selected.includes(opt.value) }"
+                                        @click="toggle(opt.value)"
+                                    >
+                                        <span x-text="opt.label"></span>
+                                        <span class="vio-ms-check" x-show="selected.includes(opt.value)">✓</span>
+                                    </button>
+                                </li>
+                            </template>
+                            <li x-show="filtered.length === 0" class="vio-ms-empty">No matches</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="block min-w-[16rem] flex-1 text-sm">
                 <span class="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</span>
-                <select
-                    wire:model.live="data.status"
-                    class="mt-1.5 w-full rounded-lg border-slate-300 text-sm shadow-sm"
-                    style="padding: 10px 12px;"
+                <div
+                    class="vio-ms mt-1.5"
+                    wire:key="status-filter-{{ md5(json_encode($statusKeys)) }}"
+                    x-data="vioMultiSelect({
+                        options: {{ $statusOptionsJson }},
+                        selected: @js($statusKeys),
+                        placeholder: 'All statuses',
+                        onChange(values) { $wire.set('data.statuses', values) }
+                    })"
+                    @click.outside="open = false"
                 >
-                    @foreach ($this->statusFilterOptions as $value => $label)
-                        <option value="{{ $value }}">{{ $label }}</option>
-                    @endforeach
-                </select>
-            </label>
+                    <button type="button" class="vio-ms-control" @click="open = !open; if (open) $nextTick(() => $refs.q.focus())">
+                        <template x-if="selected.length === 0">
+                            <span class="vio-ms-placeholder" x-text="placeholder"></span>
+                        </template>
+                        <template x-for="val in selected" :key="val">
+                            <span class="vio-ms-chip">
+                                <span x-text="labelFor(val)"></span>
+                                <button type="button" class="vio-ms-chip-x" @click.stop="toggle(val)">×</button>
+                            </span>
+                        </template>
+                        <span class="vio-ms-caret">▾</span>
+                    </button>
+                    <div class="vio-ms-panel" x-show="open" x-cloak>
+                        <input type="search" class="vio-ms-search" x-ref="q" x-model="query" placeholder="Search…" @keydown.escape.stop="open = false" />
+                        <ul class="vio-ms-list">
+                            <template x-for="opt in filtered" :key="opt.value">
+                                <li>
+                                    <button
+                                        type="button"
+                                        class="vio-ms-option"
+                                        :class="{ 'is-on': selected.includes(opt.value) }"
+                                        @click="toggle(opt.value)"
+                                    >
+                                        <span x-text="opt.label"></span>
+                                        <span class="vio-ms-check" x-show="selected.includes(opt.value)">✓</span>
+                                    </button>
+                                </li>
+                            </template>
+                            <li x-show="filtered.length === 0" class="vio-ms-empty">No matches</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
             @if ($filterActive)
                 <x-filament::button size="sm" color="gray" wire:click="clearListFilters">
                     Clear filters
@@ -398,7 +497,7 @@
                             @php
                                 $lookup = $row['lookup_status'] ?? null;
                                 $msgId = (string) ($row['id'] ?? '');
-                                // Found / Wheels queue / exported → locked. Not found stays selectable for retry.
+                                // Found / Wheels queue / exported → locked. Not found / needs review stay selectable.
                                 $selectionLocked = array_key_exists('selection_locked', $row)
                                     ? (bool) $row['selection_locked']
                                     : (
@@ -407,7 +506,7 @@
                                         || $lookup === 'found'
                                         || (
                                             ! empty($row['in_vio'])
-                                            && $lookup !== 'not_found'
+                                            && ! in_array($lookup, ['not_found', 'needs_review'], true)
                                             && filled($row['driver_name'] ?? null)
                                         )
                                     );
@@ -487,6 +586,8 @@
                                             <span class="vio-chip vio-chip-indigo">Already have · Ready</span>
                                         @elseif (! empty($row['in_vio']) && $lookup === 'found')
                                             <span class="vio-chip vio-chip-ok">Already have · Found</span>
+                                        @elseif ($lookup === 'needs_review')
+                                            <span class="vio-chip vio-chip-critical" title="{{ $row['lookup_detail'] ?? 'Multiple drivers that day' }}">Needs review · multi driver</span>
                                         @elseif ($lookup === 'not_found')
                                             <span class="vio-chip vio-chip-warn">Not found · retry</span>
                                         @elseif (! empty($row['in_vio']))

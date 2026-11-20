@@ -16,6 +16,7 @@ final class IncomingFineWorkflow
         private readonly IncomingFineProcessor $processor = new IncomingFineProcessor,
         private readonly IncomingFineReplyBuilder $replyBuilder = new IncomingFineReplyBuilder,
         private readonly WheelsysClient $wheelsys = new WheelsysClient,
+        private readonly TicketDayDriverResolver $dayDriverResolver = new TicketDayDriverResolver,
     ) {
     }
 
@@ -119,15 +120,49 @@ final class IncomingFineWorkflow
         $rentals = [];
         $rental = null;
         $wheelsys = null;
+        $dayOutcome = null;
+        $driverLabels = [];
+        $ambiguous = false;
+        $timeMissing = $fields['ticket_time'] === '';
         try {
             if ($fields['vehicle'] !== '' && $fields['ticket_date'] !== '') {
-                $rentals = $this->wheelsys->findRentalsCoveringDate($fields['vehicle'], $fields['ticket_date']);
+                if (! $timeMissing) {
+                    $rentals = $this->wheelsys->findRentalsCoveringDate(
+                        $fields['vehicle'],
+                        $fields['ticket_date'],
+                        $fields['ticket_datetime'] !== ''
+                            ? $fields['ticket_datetime']
+                            : $fields['ticket_date'].' '.$fields['ticket_time'],
+                    );
+                    if ($rentals !== []) {
+                        $rental = $rentals[0];
+                    }
+                } else {
+                    $rentals = $this->wheelsys->findRentalsCoveringDate(
+                        $fields['vehicle'],
+                        $fields['ticket_date'],
+                        null,
+                    );
+                    $resolved = $this->dayDriverResolver->resolveUniqueDrivers($rentals);
+                    $dayOutcome = $resolved['outcome'];
+                    $driverLabels = $resolved['driver_labels'];
+                    $rentals = $resolved['rentals'];
+                    $ambiguous = $resolved['outcome'] === 'ambiguous';
+
+                    if ($resolved['outcome'] === 'single') {
+                        $rental = $resolved['chosen'];
+                        $fields['ticket_time'] = WheelsysTrafficViolationExcelExporter::DEFAULT_TICKET_TIME;
+                        $fields['ticket_datetime'] = $fields['ticket_date'].'T'.$fields['ticket_time'];
+                    }
+                }
             } elseif ($fields['vehicle'] !== '') {
                 $rentals = $this->wheelsys->searchRentalsByVehicle($fields['vehicle']);
+                if ($rentals !== []) {
+                    $rental = $rentals[0];
+                }
             }
 
-            if ($rentals !== []) {
-                $rental = $rentals[0];
+            if ($rental !== null && ! $ambiguous) {
                 $wheelsys = $this->wheelsys->rentalAsWheelsysDraft(
                     $rental,
                     $fields['ticket_date'] !== '' ? $fields['ticket_date'] : null,
@@ -145,10 +180,12 @@ final class IncomingFineWorkflow
 
             $steps[] = [
                 'key' => 'rental',
-                'ok' => $rental !== null,
-                'detail' => $rental !== null
-                    ? trim(($rental['agr_no'] ?? '').' · '.($rental['driver'] ?? $rental['corporate'] ?? '—'))
-                    : ($fields['vehicle'] !== '' ? 'No covering rental for plate/date' : 'Skipped (no plate)'),
+                'ok' => $rental !== null && ! $ambiguous,
+                'detail' => $ambiguous
+                    ? 'Needs review — '.count($driverLabels).' drivers that day ('.implode(', ', $driverLabels).')'
+                    : ($rental !== null
+                        ? trim(($rental['agr_no'] ?? '').' · '.($rental['driver'] ?? $rental['corporate'] ?? '—'))
+                        : ($fields['vehicle'] !== '' ? 'No covering rental for plate/date' : 'Skipped (no plate)')),
             ];
         } catch (Throwable $e) {
             $steps[] = ['key' => 'rental', 'ok' => false, 'detail' => $e->getMessage()];
@@ -176,14 +213,18 @@ final class IncomingFineWorkflow
                 ? 'Draft ready · missing '.implode(', ', $draft['missing_fields'])
                 : 'Draft ready',
         ];
-        $exportReady = $fields['vehicle'] !== ''
+        $exportReady = ! $ambiguous
+            && $fields['vehicle'] !== ''
+            && filled($wheelsys['driver'] ?? null)
             && ($fields['reference'] !== '' || $fields['ticket_date'] !== '');
         $steps[] = [
             'key' => 'wheels_create',
             'ok' => false,
-            'detail' => $exportReady
-                ? 'Queued for Wheelsys import'
-                : 'Missing vehicle/reference/date for Wheelsys import',
+            'detail' => $ambiguous
+                ? 'Blocked — pick driver (multiple that day)'
+                : ($exportReady
+                    ? 'Queued for Wheelsys import'
+                    : 'Missing vehicle/reference/date for Wheelsys import'),
         ];
         if (($draft['reply_channel'] ?? '') === 'epaslaugos') {
             $steps[] = [
@@ -222,27 +263,32 @@ final class IncomingFineWorkflow
             'vehicle' => $fields['vehicle'] !== '' ? $fields['vehicle'] : null,
             'reference' => $fields['reference'] !== '' ? $fields['reference'] : null,
             'ticket_date' => $fields['ticket_date'] !== '' ? $fields['ticket_date'] : null,
-            'ticket_time' => $fields['ticket_time'] !== ''
-                ? $fields['ticket_time']
-                : ($fields['ticket_date'] !== ''
-                    ? WheelsysTrafficViolationExcelExporter::DEFAULT_TICKET_TIME
-                    : null),
-            'agr_no' => $rental['agr_no'] ?? null,
-            'rental_id' => isset($rental['id']) ? (int) $rental['id'] : null,
-            'driver_name' => $wheelsys['driver'] ?? null,
+            'ticket_time' => $ambiguous
+                ? null
+                : ($fields['ticket_time'] !== '' ? $fields['ticket_time'] : null),
+            'agr_no' => $ambiguous ? null : ($rental['agr_no'] ?? null),
+            'rental_id' => $ambiguous ? null : (isset($rental['id']) ? (int) $rental['id'] : null),
+            'driver_name' => $ambiguous ? null : ($wheelsys['driver'] ?? null),
             'local_attachment_dir' => $extract['saved_dir'] ?? null,
             'workflow' => [
                 'steps' => $steps,
                 'fields' => $fields,
-                'wheelsys' => is_array($wheelsys) ? $wheelsys : null,
+                'wheelsys' => $ambiguous ? null : (is_array($wheelsys) ? $wheelsys : null),
                 'rental_count' => count($rentals),
+                'day_driver_outcome' => $dayOutcome,
+                'ambiguous_drivers' => $ambiguous ? $driverLabels : [],
+                'ticket_time_defaulted' => $timeMissing && $dayOutcome === 'single',
             ],
             // Do not overwrite an already-exported row if Process is re-run on same graph id
             // (graph_message_id is unique — Process typically creates new log; keep status pending when ready).
-            'wheels_export_status' => $exportReady
-                ? FineProcessLog::WHEELS_EXPORT_PENDING
-                : FineProcessLog::WHEELS_EXPORT_SKIPPED,
-            'status' => ! empty($process['error']) ? 'partial' : 'processed',
+            'wheels_export_status' => $ambiguous
+                ? FineProcessLog::WHEELS_EXPORT_NEEDS_REVIEW
+                : ($exportReady
+                    ? FineProcessLog::WHEELS_EXPORT_PENDING
+                    : FineProcessLog::WHEELS_EXPORT_SKIPPED),
+            'status' => $ambiguous
+                ? 'lookup_ambiguous'
+                : (! empty($process['error']) ? 'partial' : 'processed'),
             'error' => $process['error'] ?? $log->error,
         ])->save();
 

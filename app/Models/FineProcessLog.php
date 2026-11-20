@@ -68,6 +68,9 @@ class FineProcessLog extends Model
 
     public const WHEELS_EXPORT_SKIPPED = 'skipped';
 
+    /** Date-only fine with 2+ drivers that day — blocked until human picks rental. */
+    public const WHEELS_EXPORT_NEEDS_REVIEW = 'needs_review';
+
     public const WHEELS_IMPORT_AWAITING = 'awaiting';
 
     public const WHEELS_IMPORT_IMPORTED = 'imported';

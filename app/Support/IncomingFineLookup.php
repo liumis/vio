@@ -14,6 +14,7 @@ final class IncomingFineLookup
         private readonly IncomingFineAttachmentTextExtractor $extractor = new IncomingFineAttachmentTextExtractor,
         private readonly IncomingFineReplyBuilder $replyBuilder = new IncomingFineReplyBuilder,
         private readonly WheelsysClient $wheelsys = new WheelsysClient,
+        private readonly TicketDayDriverResolver $dayDriverResolver = new TicketDayDriverResolver,
     ) {
     }
 
@@ -95,29 +96,56 @@ final class IncomingFineLookup
         $rental = null;
         $wheelsys = null;
         $lookupError = null;
+        $dayOutcome = null;
+        $driverLabels = [];
+        $timeMissing = $fields['ticket_time'] === '';
+        $resolvedTicketTime = $fields['ticket_time'];
+        $ticketDate = $fields['ticket_date'] !== ''
+            ? $fields['ticket_date']
+            : ($fields['ticket_datetime'] !== '' ? substr($fields['ticket_datetime'], 0, 10) : '');
 
         try {
-            if ($fields['vehicle'] !== '' && ($fields['ticket_datetime'] !== '' || $fields['ticket_date'] !== '')) {
-                $rentals = $this->wheelsys->findRentalsCoveringDate(
-                    $fields['vehicle'],
-                    $fields['ticket_date'] !== '' ? $fields['ticket_date'] : substr($fields['ticket_datetime'], 0, 10),
-                    $fields['ticket_datetime'] !== '' ? $fields['ticket_datetime'] : (
-                        $fields['ticket_date'] !== ''
-                            ? $fields['ticket_date'].' '.($fields['ticket_time'] !== ''
-                                ? $fields['ticket_time']
-                                : WheelsysTrafficViolationExcelExporter::DEFAULT_TICKET_TIME)
-                            : null
-                    ),
-                );
+
+            if ($fields['vehicle'] !== '' && $ticketDate !== '') {
+                if (! $timeMissing) {
+                    // Precise offense moment — cover that timestamp only.
+                    $rentals = $this->wheelsys->findRentalsCoveringDate(
+                        $fields['vehicle'],
+                        $ticketDate,
+                        $fields['ticket_datetime'] !== ''
+                            ? $fields['ticket_datetime']
+                            : $ticketDate.' '.$fields['ticket_time'],
+                    );
+                    if ($rentals !== []) {
+                        $rental = $rentals[0];
+                    }
+                } else {
+                    // No time on notice: inspect the whole calendar day (00:00–23:59).
+                    $rentals = $this->wheelsys->findRentalsCoveringDate($fields['vehicle'], $ticketDate, null);
+                    $resolved = $this->dayDriverResolver->resolveUniqueDrivers($rentals);
+                    $dayOutcome = $resolved['outcome'];
+                    $driverLabels = $resolved['driver_labels'];
+                    $rentals = $resolved['rentals'];
+
+                    if ($resolved['outcome'] === 'single') {
+                        $rental = $resolved['chosen'];
+                        // Safe default for Wheelsys import when only one driver that day.
+                        $resolvedTicketTime = WheelsysTrafficViolationExcelExporter::DEFAULT_TICKET_TIME;
+                        $fields['ticket_time'] = $resolvedTicketTime;
+                        $fields['ticket_datetime'] = $ticketDate.'T'.$resolvedTicketTime;
+                    }
+                }
             } elseif ($fields['vehicle'] !== '') {
                 $rentals = $this->wheelsys->searchRentalsByVehicle($fields['vehicle']);
+                if ($rentals !== []) {
+                    $rental = $rentals[0];
+                }
             }
 
-            if ($rentals !== []) {
-                $rental = $rentals[0];
+            if ($rental !== null) {
                 $wheelsys = $this->wheelsys->rentalAsWheelsysDraft(
                     $rental,
-                    $fields['ticket_date'] !== '' ? $fields['ticket_date'] : null,
+                    $ticketDate !== '' ? $ticketDate : null,
                     $fields['ticket_datetime'] !== '' ? $fields['ticket_datetime'] : null,
                 );
                 if ($fields['reference'] !== '') {
@@ -132,23 +160,37 @@ final class IncomingFineLookup
             $lookupError = $e->getMessage();
         }
 
+        $ambiguous = $dayOutcome === 'ambiguous';
         $driverName = trim((string) ($wheelsys['driver'] ?? $rental['driver'] ?? $rental['corporate'] ?? ''));
-        $found = $rental !== null && $driverName !== '';
-        $detail = $rental !== null && $driverName === ''
-            ? 'Rental found but driver missing'
-            : ($found
-                ? trim(($rental['agr_no'] ?? '').' · '.$driverName)
-                : ($lookupError
-                    ?: ($fields['vehicle'] === ''
-                        ? 'Missing vehicle / plate'
-                        : ($fields['ticket_date'] === '' && $fields['ticket_datetime'] === ''
-                            ? 'No covering rental (no ticket date/time)'
-                            : 'No covering rental for plate/date/time'))));
+        $found = ! $ambiguous && $rental !== null && $driverName !== '';
+        $detail = $ambiguous
+            ? 'Needs review — '.count($driverLabels).' drivers that day ('.implode(', ', $driverLabels).')'
+            : ($rental !== null && $driverName === ''
+                ? 'Rental found but driver missing'
+                : ($found
+                    ? trim(($rental['agr_no'] ?? '').' · '.$driverName)
+                    .($timeMissing && $dayOutcome === 'single' ? ' · time default 09:00 (single driver that day)' : '')
+                    : ($lookupError
+                        ?: ($fields['vehicle'] === ''
+                            ? 'Missing vehicle / plate'
+                            : ($fields['ticket_date'] === '' && $fields['ticket_datetime'] === ''
+                                ? 'No covering rental (no ticket date/time)'
+                                : 'No covering rental for plate/date/time')))));
 
         $draft = $this->replyBuilder->build($message, $wheelsys);
 
         $messageId = (string) ($message['id'] ?? '');
         $log = FineProcessLog::query()->firstOrNew(['graph_message_id' => $messageId]);
+
+        $exportStatus = FineProcessLog::WHEELS_EXPORT_SKIPPED;
+        if ($ambiguous) {
+            $exportStatus = FineProcessLog::WHEELS_EXPORT_NEEDS_REVIEW;
+        } elseif ($found && $fields['vehicle'] !== '') {
+            $exportStatus = $log->wheels_export_status === FineProcessLog::WHEELS_EXPORT_EXPORTED
+                ? FineProcessLog::WHEELS_EXPORT_EXPORTED
+                : FineProcessLog::WHEELS_EXPORT_PENDING;
+        }
+
         $log->fill([
             'mailbox' => $log->mailbox ?: app(MicrosoftGraphInbox::class)->mailbox(),
             'from_email' => $message['from_email'] ?? $log->from_email,
@@ -160,23 +202,21 @@ final class IncomingFineLookup
             'authority_name' => (($message['authority_name'] ?? '—') !== '—' ? $message['authority_name'] : $log->authority_name),
             'vehicle' => $fields['vehicle'] !== '' ? $fields['vehicle'] : null,
             'reference' => $fields['reference'] !== '' ? $fields['reference'] : null,
-            'ticket_date' => $fields['ticket_date'] !== '' ? $fields['ticket_date'] : null,
-            // Wheelsys needs a time; default 09:00 when notice has date only (e.g. Julianus).
-            'ticket_time' => $fields['ticket_time'] !== ''
-                ? $fields['ticket_time']
-                : ($fields['ticket_date'] !== ''
-                    ? WheelsysTrafficViolationExcelExporter::DEFAULT_TICKET_TIME
+            'ticket_date' => $fields['ticket_date'] !== ''
+                ? $fields['ticket_date']
+                : ($ticketDate !== '' ? $ticketDate : null),
+            // Only persist default 09:00 when a single day-driver was resolved (or time was extracted).
+            'ticket_time' => $ambiguous
+                ? null
+                : ($resolvedTicketTime !== ''
+                    ? $resolvedTicketTime
                     : null),
-            'agr_no' => $rental['agr_no'] ?? null,
-            'rental_id' => isset($rental['id']) ? (int) $rental['id'] : null,
-            'driver_name' => $wheelsys['driver'] ?? null,
+            'agr_no' => $ambiguous ? null : ($rental['agr_no'] ?? null),
+            'rental_id' => $ambiguous ? null : (isset($rental['id']) ? (int) $rental['id'] : null),
+            'driver_name' => $ambiguous ? null : ($wheelsys['driver'] ?? null),
             'local_attachment_dir' => $extract['saved_dir'] ?? $log->local_attachment_dir,
-            'status' => $found ? 'lookup_found' : 'lookup_missing',
-            'wheels_export_status' => $found && $fields['vehicle'] !== ''
-                ? ($log->wheels_export_status === FineProcessLog::WHEELS_EXPORT_EXPORTED
-                    ? FineProcessLog::WHEELS_EXPORT_EXPORTED
-                    : FineProcessLog::WHEELS_EXPORT_PENDING)
-                : FineProcessLog::WHEELS_EXPORT_SKIPPED,
+            'status' => $ambiguous ? 'lookup_ambiguous' : ($found ? 'lookup_found' : 'lookup_missing'),
+            'wheels_export_status' => $exportStatus,
             'processed_by' => $userId ?? $log->processed_by,
             'processed_at' => $log->processed_at ?: now(),
             'error' => $lookupError,
@@ -185,8 +225,11 @@ final class IncomingFineLookup
                     ['key' => 'lookup', 'ok' => $found, 'detail' => $detail],
                 ],
                 'fields' => $fields,
-                'wheelsys' => is_array($wheelsys) ? $wheelsys : null,
+                'wheelsys' => $ambiguous ? null : (is_array($wheelsys) ? $wheelsys : null),
                 'rental_count' => count($rentals),
+                'day_driver_outcome' => $dayOutcome,
+                'ambiguous_drivers' => $ambiguous ? $driverLabels : [],
+                'ticket_time_defaulted' => $timeMissing && $dayOutcome === 'single',
             ],
         ])->save();
 
@@ -205,15 +248,15 @@ final class IncomingFineLookup
 
         return [
             'message' => $message,
-            'lookup_status' => $found ? 'found' : 'not_found',
+            'lookup_status' => $ambiguous ? 'needs_review' : ($found ? 'found' : 'not_found'),
             'lookup_detail' => $detail,
             'vehicle' => $fields['vehicle'],
             'reference' => $fields['reference'],
-            'ticket_date' => $fields['ticket_date'],
-            'ticket_time' => $fields['ticket_time'],
+            'ticket_date' => $fields['ticket_date'] !== '' ? $fields['ticket_date'] : ($ticketDate ?? ''),
+            'ticket_time' => $ambiguous ? '' : $resolvedTicketTime,
             'ticket_datetime' => $fields['ticket_datetime'],
-            'rental' => $rental,
-            'wheelsys' => $wheelsys,
+            'rental' => $ambiguous ? null : $rental,
+            'wheelsys' => $ambiguous ? null : $wheelsys,
             'draft' => $draft,
             'log' => $log,
             'rentals' => $rentals,

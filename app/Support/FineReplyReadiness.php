@@ -153,6 +153,59 @@ final class FineReplyReadiness
     }
 
     /**
+     * Human labels for missing field keys (modal warning banner).
+     *
+     * @param  list<string>  $missing
+     * @return list<string>
+     */
+    public static function missingLabels(array $missing): array
+    {
+        $map = [
+            'vehicle' => 'Vehicle / plate',
+            'driver' => 'Driver name',
+            'reference' => 'Reference / ticket no.',
+            'ticket_date' => 'Ticket date',
+            'birth_date' => 'Driver birth date',
+            'email' => 'Driver email',
+            'mail_template' => 'Authority mail template',
+            'authority' => 'Authority match',
+            'authority_to' => 'Authority To email',
+        ];
+
+        $out = [];
+        foreach ($missing as $key) {
+            $key = trim((string) $key);
+            if ($key === '') {
+                continue;
+            }
+            $out[] = $map[$key] ?? str_replace('_', ' ', $key);
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * Critical gaps block a safe send; others are warning-level.
+     *
+     * @param  list<string>  $missing
+     */
+    public static function missingSeverity(array $missing): string
+    {
+        if ($missing === []) {
+            return 'ok';
+        }
+
+        $critical = ['vehicle', 'driver', 'reference', 'authority', 'authority_to', 'mail_template', 'ticket_date'];
+        foreach ($missing as $key) {
+            if (in_array($key, $critical, true)) {
+                return 'error';
+            }
+        }
+
+        return 'warning';
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public static function wheelsysFromLog(FineProcessLog $log): array
@@ -189,6 +242,13 @@ final class FineReplyReadiness
         $workflow = is_array($log->workflow) ? $log->workflow : [];
         $workflow['wheelsys'] = $wheelsys;
         $log->fill(['workflow' => $workflow])->save();
+
+        // Drop memo so Reply bubble / open modal see fresh wheelsys fields.
+        foreach (array_keys(self::$memo) as $key) {
+            if (str_starts_with($key, (string) $log->id.'|')) {
+                unset(self::$memo[$key]);
+            }
+        }
 
         return $wheelsys;
     }
