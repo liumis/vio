@@ -27,6 +27,12 @@ class EpaslaugosFollowUp extends Page
 
     protected static string $view = 'filament.pages.epaslaugos-follow-up';
 
+    /** MVP: hide from nav — Atmesti follow-up is manual portal check, not needed in nav yet. */
+    public static function shouldRegisterNavigation(): bool
+    {
+        return false;
+    }
+
     /**
      * @return list<array<string, mixed>>
      */
