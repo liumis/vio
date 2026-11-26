@@ -163,19 +163,23 @@ final class IncomingFineLookup
         $ambiguous = $dayOutcome === 'ambiguous';
         $driverName = trim((string) ($wheelsys['driver'] ?? $rental['driver'] ?? $rental['corporate'] ?? ''));
         $found = ! $ambiguous && $rental !== null && $driverName !== '';
+        $lookupMissing = $ambiguous
+            ? []
+            : ($found
+                ? []
+                : $this->buildLookupMissing(
+                    fields: $fields,
+                    ticketDate: $ticketDate,
+                    rental: $rental,
+                    driverName: $driverName,
+                    lookupError: $lookupError,
+                ));
         $detail = $ambiguous
             ? 'Needs review — '.count($driverLabels).' drivers that day ('.implode(', ', $driverLabels).')'
-            : ($rental !== null && $driverName === ''
-                ? 'Rental found but driver missing'
-                : ($found
-                    ? trim(($rental['agr_no'] ?? '').' · '.$driverName)
+            : ($found
+                ? trim(($rental['agr_no'] ?? '').' · '.$driverName)
                     .($timeMissing && $dayOutcome === 'single' ? ' · time default 09:00 (single driver that day)' : '')
-                    : ($lookupError
-                        ?: ($fields['vehicle'] === ''
-                            ? 'Missing vehicle / plate'
-                            : ($fields['ticket_date'] === '' && $fields['ticket_datetime'] === ''
-                                ? 'No covering rental (no ticket date/time)'
-                                : 'No covering rental for plate/date/time')))));
+                : $this->formatLookupMissingDetail($lookupMissing, $lookupError));
 
         $draft = $this->replyBuilder->build($message, $wheelsys);
 
@@ -225,6 +229,7 @@ final class IncomingFineLookup
                     ['key' => 'lookup', 'ok' => $found, 'detail' => $detail],
                 ],
                 'fields' => $fields,
+                'lookup_missing' => $lookupMissing,
                 'wheelsys' => $ambiguous ? null : (is_array($wheelsys) ? $wheelsys : null),
                 'rental_count' => count($rentals),
                 'day_driver_outcome' => $dayOutcome,
@@ -250,6 +255,7 @@ final class IncomingFineLookup
             'message' => $message,
             'lookup_status' => $ambiguous ? 'needs_review' : ($found ? 'found' : 'not_found'),
             'lookup_detail' => $detail,
+            'lookup_missing' => $lookupMissing,
             'vehicle' => $fields['vehicle'],
             'reference' => $fields['reference'],
             'ticket_date' => $fields['ticket_date'] !== '' ? $fields['ticket_date'] : ($ticketDate ?? ''),
@@ -261,6 +267,165 @@ final class IncomingFineLookup
             'log' => $log,
             'rentals' => $rentals,
         ];
+    }
+
+    /**
+     * Human labels for lookup gap keys (UI chip / tooltip).
+     *
+     * @return array<string, string>
+     */
+    public static function missingLabels(): array
+    {
+        return [
+            'plate' => 'Plate / numeris',
+            'ticket_date' => 'Ticket date',
+            'ticket_time' => 'Ticket time',
+            'reference' => 'Reference / bylos nr.',
+            'rental' => 'Wheelsys rental',
+            'driver' => 'Driver / pavardė',
+            'company' => 'Company name',
+            'error' => 'Lookup error',
+        ];
+    }
+
+    /**
+     * @param  list<string>  $missing
+     * @return array{chip: string, tooltip: string, labels: list<string>}
+     */
+    public static function presentMissing(array $missing, ?string $detail = null): array
+    {
+        $map = self::missingLabels();
+        $labels = [];
+        foreach ($missing as $key) {
+            $key = trim((string) $key);
+            if ($key === '') {
+                continue;
+            }
+            $labels[] = $map[$key] ?? str_replace('_', ' ', $key);
+        }
+        $labels = array_values(array_unique($labels));
+
+        if ($labels === []) {
+            $fallback = trim((string) $detail);
+            return [
+                'chip' => $fallback !== '' ? 'Not found · see tip' : 'Not found · retry',
+                'tooltip' => $fallback !== '' ? $fallback : 'Could not find driver / rental',
+                'labels' => $fallback !== '' ? [$fallback] : [],
+            ];
+        }
+
+        $chip = count($labels) === 1
+            ? 'Not found · '.$labels[0]
+            : 'Not found · '.count($labels).' missing';
+
+        $tooltipLines = array_map(static fn (string $label): string => '· '.$label, $labels);
+        $detail = trim((string) $detail);
+        if ($detail !== '' && ! in_array($detail, $labels, true)) {
+            $tooltipLines[] = '';
+            $tooltipLines[] = $detail;
+        }
+
+        return [
+            'chip' => $chip,
+            'tooltip' => implode("\n", $tooltipLines),
+            'labels' => $labels,
+        ];
+    }
+
+    /**
+     * Rebuild gaps for older logs that predate lookup_missing.
+     *
+     * @return list<string>
+     */
+    public static function inferMissingFromLog(FineProcessLog $log): array
+    {
+        if (is_array($log->workflow['lookup_missing'] ?? null) && $log->workflow['lookup_missing'] !== []) {
+            return array_values(array_map('strval', $log->workflow['lookup_missing']));
+        }
+
+        $fields = is_array($log->workflow['fields'] ?? null) ? $log->workflow['fields'] : [];
+        $vehicle = trim((string) ($log->vehicle ?: ($fields['vehicle'] ?? '')));
+        $ticketDate = trim((string) (
+            ($log->ticket_date?->format('Y-m-d'))
+            ?: ($fields['ticket_date'] ?? '')
+            ?: (($fields['ticket_datetime'] ?? '') !== '' ? substr((string) $fields['ticket_datetime'], 0, 10) : '')
+        ));
+        $driverName = trim((string) ($log->driver_name ?? ''));
+        $hasRental = filled($log->rental_id) || filled($log->agr_no);
+
+        return (new self)->buildLookupMissing(
+            fields: [
+                'vehicle' => $vehicle,
+                'ticket_date' => $ticketDate,
+                'ticket_time' => (string) ($log->ticket_time ?: ($fields['ticket_time'] ?? '')),
+                'ticket_datetime' => (string) ($fields['ticket_datetime'] ?? ''),
+                'reference' => (string) ($log->reference ?: ($fields['reference'] ?? '')),
+            ],
+            ticketDate: $ticketDate,
+            rental: $hasRental ? ['id' => $log->rental_id, 'agr_no' => $log->agr_no] : null,
+            driverName: $driverName,
+            lookupError: filled($log->error) ? (string) $log->error : null,
+        );
+    }
+
+    /**
+     * @param  array{vehicle?:string,ticket_date?:string,ticket_time?:string,ticket_datetime?:string,reference?:string}  $fields
+     * @param  array<string, mixed>|null  $rental
+     * @return list<string>
+     */
+    private function buildLookupMissing(
+        array $fields,
+        string $ticketDate,
+        ?array $rental,
+        string $driverName,
+        ?string $lookupError,
+    ): array {
+        $missing = [];
+        $vehicle = trim((string) ($fields['vehicle'] ?? ''));
+        $reference = trim((string) ($fields['reference'] ?? ''));
+        $ticketTime = trim((string) ($fields['ticket_time'] ?? ''));
+
+        // What we failed to parse from the notice (blocks / explains Find driver).
+        if ($vehicle === '') {
+            $missing[] = 'plate';
+        }
+        if ($ticketDate === '') {
+            $missing[] = 'ticket_date';
+        }
+        if ($reference === '' && ($vehicle === '' || $ticketDate === '')) {
+            $missing[] = 'reference';
+        }
+
+        if ($lookupError) {
+            $missing[] = 'error';
+        } elseif ($rental === null && $vehicle !== '') {
+            $missing[] = 'rental';
+            // Time often decides which rental covers the offense.
+            if ($ticketDate !== '' && $ticketTime === '') {
+                $missing[] = 'ticket_time';
+            }
+        } elseif ($rental !== null && $driverName === '') {
+            $missing[] = 'driver';
+        }
+
+        return array_values(array_unique($missing));
+    }
+
+    /**
+     * @param  list<string>  $missing
+     */
+    private function formatLookupMissingDetail(array $missing, ?string $lookupError): string
+    {
+        if (filled($lookupError)) {
+            return (string) $lookupError;
+        }
+
+        $presented = self::presentMissing($missing);
+        if ($presented['labels'] === []) {
+            return 'Could not find driver / rental';
+        }
+
+        return 'Missing: '.implode(', ', $presented['labels']);
     }
 
     /**
@@ -289,6 +454,7 @@ final class IncomingFineLookup
                 'steps' => [
                     ['key' => 'lookup', 'ok' => false, 'detail' => $detail],
                 ],
+                'lookup_missing' => [],
             ],
         ])->save();
 
@@ -296,6 +462,7 @@ final class IncomingFineLookup
             'message' => $message,
             'lookup_status' => 'not_found',
             'lookup_detail' => $detail,
+            'lookup_missing' => [],
             'vehicle' => '',
             'reference' => '',
             'ticket_date' => '',

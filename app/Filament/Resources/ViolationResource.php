@@ -164,12 +164,15 @@ class ViolationResource extends Resource
                     ->label('Import file')
                     ->searchable()
                     ->sortable()
-                    ->wrap()
-                    ->placeholder('—')
-                    ->description(fn (FineProcessLog $record): ?string => filled($record->wheels_exported_at)
-                        ? 'Prepared '.$record->wheels_exported_at->timezone(config('app.timezone'))->format('Y-m-d H:i')
+                    ->limit(28)
+                    ->tooltip(fn (FineProcessLog $record): ?string => filled($record->wheels_export_file_name)
+                        ? (string) $record->wheels_export_file_name
+                            .(filled($record->wheels_exported_at)
+                                ? ' · Prepared '.$record->wheels_exported_at->timezone(config('app.timezone'))->format('Y-m-d H:i')
+                                : '')
                         : null)
-                    ->toggleable(),
+                    ->placeholder('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('vehicle')
                     ->label('Vehicle')
                     ->searchable()

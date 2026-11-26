@@ -75,11 +75,9 @@ class AdminPanelProvider extends PanelProvider
         margin: 0.35rem 0.45rem 0.85rem !important;
         padding: 0.55rem 0.4rem 0.65rem !important;
         border-radius: 0.85rem !important;
-        background:
-            linear-gradient(180deg, rgba(46, 204, 113, 0.12) 0%, rgba(34, 58, 78, 0.06) 100%),
-            #f4faf7 !important;
-        border: 1px solid #86efac !important;
-        box-shadow: 0 8px 22px rgba(34, 58, 78, 0.08) !important;
+        background: #f0fdf4 !important;
+        border: 1px solid #bbf7d0 !important;
+        box-shadow: none !important;
     }
     .fi-sidebar-nav .fi-sidebar-group:has(a.fi-sidebar-item-button[href*="incoming-fines"]) > .fi-sidebar-group-button,
     .fi-sidebar-nav .fi-sidebar-group:has(a.fi-sidebar-item-button[href*="incoming-fines"]) .fi-sidebar-group-label {

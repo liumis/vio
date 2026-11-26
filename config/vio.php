@@ -41,4 +41,25 @@ return [
 
     'debt_tracker_file_name' => env('DEBT_TRACKER_FILE_NAME', 'CHARGEBACKS-DEBTS.xlsx'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Outbound HTTP / PHP timeouts (seconds)
+    |--------------------------------------------------------------------------
+    |
+    | Used by Wheelsys, SharePoint, Graph mail/inbox, MarkSign, OCR, etc.
+    | Raise via .env when slow networks or large ZIP/PDF transfers time out.
+    |
+    */
+
+    'timeouts' => [
+        // Token / SSO / quick Graph calls
+        'short' => (int) env('VIO_HTTP_TIMEOUT_SHORT', 120),
+        // Normal API (folder ensure, mailbox move, …)
+        'default' => (int) env('VIO_HTTP_TIMEOUT', 300),
+        // Inbox fetch, uploads/downloads, Wheelsys
+        'long' => (int) env('VIO_HTTP_TIMEOUT_LONG', 600),
+        // PHP / Livewire request ceiling (Read emails Fetch, Update status, …)
+        'php' => (int) env('VIO_PHP_TIMEOUT', 600),
+    ],
+
 ];

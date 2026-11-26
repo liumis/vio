@@ -26,6 +26,20 @@ Adresas: [%9%]
 Pagarbiai
 TXT;
 
+        $corporateReplyTemplate = <<<'TXT'
+Sveiki,
+
+Automobilį [%4%] pažeidimo metu vairavo:
+
+Įmonė: [%2%]
+Įmonės kodas: [%13%]
+Adresas: [%9%]
+El. paštas: [%8%]
+Telefono numeris: [%10%]
+
+Pagarbiai
+TXT;
+
         $vilniusTemplate = <<<'TXT'
 Sveiki,
 
@@ -55,6 +69,7 @@ TXT;
                 'to_email' => 'anam@vilnius.lt',
                 'email_pattern' => '@vilnius.lt',
                 'mail_template' => $vilniusTemplate,
+                'mail_template_corporate' => $corporateReplyTemplate,
                 'info_pdf_template' => 'vilnius',
                 ...$defaultTerminas,
             ],
@@ -65,6 +80,7 @@ TXT;
                 'to_email' => 'info@unipark.lt',
                 'email_pattern' => '@unipark.lt',
                 'mail_template' => $driverReplyTemplate,
+                'mail_template_corporate' => $corporateReplyTemplate,
                 'info_pdf_template' => null,
                 ...$defaultTerminas,
             ],
@@ -75,6 +91,7 @@ TXT;
                 'to_email' => 'info@judu.lt',
                 'email_pattern' => '@judu.lt',
                 'mail_template' => $driverReplyTemplate,
+                'mail_template_corporate' => $corporateReplyTemplate,
                 'info_pdf_template' => null,
                 ...$defaultTerminas,
             ],
@@ -85,6 +102,7 @@ TXT;
                 'to_email' => 'info@julianus.lt',
                 'email_pattern' => '@julianus.lt',
                 'mail_template' => $driverReplyTemplate,
+                'mail_template_corporate' => $corporateReplyTemplate,
                 'info_pdf_template' => null,
                 'requires_contract' => true,
                 ...$defaultTerminas,
@@ -98,6 +116,7 @@ TXT;
                 'to_email' => null,
                 'email_pattern' => '@anr.gov.lt',
                 'mail_template' => $driverReplyTemplate,
+                'mail_template_corporate' => $corporateReplyTemplate,
                 'info_pdf_template' => null,
                 ...$defaultTerminas,
             ],
@@ -108,6 +127,7 @@ TXT;
                 'to_email' => 'apmokejimai@legalbalance.lt',
                 'email_pattern' => '@legalbalance.lt',
                 'mail_template' => $driverReplyTemplate,
+                'mail_template_corporate' => $corporateReplyTemplate,
                 'info_pdf_template' => null,
                 ...$defaultTerminas,
             ],
@@ -118,6 +138,7 @@ TXT;
                 'to_email' => 'info@parkavimasmieste.lt',
                 'email_pattern' => '@parkavimasmieste.lt',
                 'mail_template' => $driverReplyTemplate,
+                'mail_template_corporate' => $corporateReplyTemplate,
                 'info_pdf_template' => null,
                 ...$defaultTerminas,
             ],
@@ -128,6 +149,7 @@ TXT;
                 'to_email' => 'kanceleja.cpp@vp.gov.lv',
                 'email_pattern' => '@vp.gov.lv',
                 'mail_template' => $driverReplyTemplate,
+                'mail_template_corporate' => $corporateReplyTemplate,
                 'info_pdf_template' => 'latvia',
                 ...$defaultTerminas,
             ],
@@ -139,6 +161,7 @@ TXT;
                 'to_email' => 'canard@gitd.gov.pl',
                 'email_pattern' => '@gitd.gov.pl',
                 'mail_template' => $driverReplyTemplate,
+                'mail_template_corporate' => $corporateReplyTemplate,
                 'info_pdf_template' => null,
                 ...$defaultTerminas,
             ],
@@ -150,6 +173,7 @@ TXT;
                 'to_email' => null,
                 'email_pattern' => '@teismas.lt',
                 'mail_template' => $driverReplyTemplate,
+                'mail_template_corporate' => $corporateReplyTemplate,
                 'info_pdf_template' => null,
                 ...$defaultTerminas,
             ],

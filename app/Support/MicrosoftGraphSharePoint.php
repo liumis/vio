@@ -21,7 +21,7 @@ final class MicrosoftGraphSharePoint
         }
 
         $tokenResponse = Http::asForm()
-            ->timeout(20)
+            ->timeout(HttpTimeouts::short())
             ->post("https://login.microsoftonline.com/{$tenantId}/oauth2/v2.0/token", [
                 'client_id' => $clientId,
                 'client_secret' => $clientSecret,
@@ -59,7 +59,7 @@ final class MicrosoftGraphSharePoint
         }
 
         $response = Http::withToken($this->accessToken())
-            ->timeout(30)
+            ->timeout(HttpTimeouts::default())
             ->get('https://graph.microsoft.com/v1.0/sites/'.$host.':'.$path);
 
         if (! $response->successful()) {
@@ -102,7 +102,7 @@ final class MicrosoftGraphSharePoint
                 .'/drive/root:/'.$encodedPath.':/content';
 
             $response = Http::withToken($this->accessToken())
-                ->timeout(60)
+                ->timeout(HttpTimeouts::long())
                 ->withBody($contents, 'application/octet-stream')
                 ->put($url);
 
@@ -162,7 +162,7 @@ final class MicrosoftGraphSharePoint
                 .'/drive/root:/'.$encodedPath.':/content';
 
             $response = Http::withToken($this->accessToken())
-                ->timeout(90)
+                ->timeout(HttpTimeouts::long())
                 ->withHeaders(['Accept' => 'application/octet-stream'])
                 ->get($url);
 
@@ -220,7 +220,7 @@ final class MicrosoftGraphSharePoint
                 $encodedPath = implode('/', array_map(rawurlencode(...), explode('/', $built)));
                 $getUrl = 'https://graph.microsoft.com/v1.0/sites/'.rawurlencode($siteId).'/drive/root:/'.$encodedPath;
 
-                $response = Http::withToken($token)->timeout(30)->get($getUrl);
+                $response = Http::withToken($token)->timeout(HttpTimeouts::default())->get($getUrl);
                 if ($response->successful()) {
                     $last = [
                         'id' => (string) ($response->json('id') ?? ''),
@@ -241,7 +241,7 @@ final class MicrosoftGraphSharePoint
                 }
 
                 $create = Http::withToken($token)
-                    ->timeout(30)
+                    ->timeout(HttpTimeouts::default())
                     ->post($createUrl, [
                         'name' => $segment,
                         'folder' => (object) [],
@@ -250,7 +250,7 @@ final class MicrosoftGraphSharePoint
 
                 if (! $create->successful()) {
                     // Race / already created → re-fetch.
-                    $retry = Http::withToken($token)->timeout(30)->get($getUrl);
+                    $retry = Http::withToken($token)->timeout(HttpTimeouts::default())->get($getUrl);
                     if ($retry->successful()) {
                         $last = [
                             'id' => (string) ($retry->json('id') ?? ''),

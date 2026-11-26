@@ -113,6 +113,7 @@ final class IncomingFineReplySender
 
     /**
      * Attach the received fine notice PDF(s) from local archive (instruction: gautą pranešimo dokumentą).
+     * Falls back to SharePoint primary fine document when local PDF folder is empty.
      *
      * @return list<array{path:string,name:string,content_type:string}>
      */
@@ -122,34 +123,76 @@ final class IncomingFineReplySender
             return [];
         }
 
-        $dir = trim(str_replace('\\', '/', (string) ($log->local_attachment_dir ?? '')), '/');
-        if ($dir === '') {
-            return [];
-        }
-
         $disk = Storage::disk('local');
-        if (! $disk->exists($dir)) {
+        $out = [];
+
+        $dir = trim(str_replace('\\', '/', (string) ($log->local_attachment_dir ?? '')), '/');
+        if ($dir !== '' && $disk->exists($dir)) {
+            foreach ($disk->files($dir) as $relative) {
+                $base = strtolower(basename($relative));
+                if (! str_ends_with($base, '.pdf')) {
+                    continue;
+                }
+                if (str_contains($base, 'combined') || str_ends_with($base, '.extract.txt')) {
+                    continue;
+                }
+                if (str_starts_with($base, 'rnt-')) {
+                    continue;
+                }
+
+                $out[] = [
+                    'path' => $relative,
+                    'name' => basename($relative),
+                    'content_type' => 'application/pdf',
+                ];
+            }
+        }
+
+        if ($out !== []) {
+            return $out;
+        }
+
+        $workflow = is_array($log->workflow) ? $log->workflow : [];
+        $storedDoc = is_array($workflow['sharepoint_document'] ?? null) ? $workflow['sharepoint_document'] : [];
+        $fileName = trim((string) ($storedDoc['file'] ?? ''));
+        $folder = trim((string) ($storedDoc['folder'] ?? ''));
+        if ($fileName === '') {
+            $url = $log->documentSharePointUrl();
+            if ($url === null || $url === '') {
+                return [];
+            }
+            $fileName = basename(urldecode((string) (parse_url($url, PHP_URL_PATH) ?: '')));
+            if ($folder === '') {
+                $folder = app(IncomingFineDocumentArchiver::class)->documentFolderPathForLog($log);
+            }
+        }
+        if ($fileName === '' || str_contains($fileName, '/') || str_starts_with(strtolower($fileName), 'rnt-')) {
             return [];
         }
 
-        $out = [];
-        foreach ($disk->files($dir) as $relative) {
-            $base = strtolower(basename($relative));
-            if (! str_ends_with($base, '.pdf')) {
-                continue;
+        try {
+            $binary = app(MicrosoftGraphSharePoint::class)->download(
+                $fileName,
+                $folder !== '' ? $folder : null,
+            );
+            if ($binary === '' || ! str_starts_with($binary, '%PDF')) {
+                return [];
             }
-            if (str_contains($base, 'combined') || str_ends_with($base, '.extract.txt')) {
-                continue;
+            $safeName = preg_replace('/[\/\\\\:*?"<>|]+/', '-', $fileName) ?: 'fine-notice.pdf';
+            $relative = 'private/notice-send/'.$log->id.'-'.uniqid('', true).'/'.$safeName;
+            $disk->put($relative, $binary);
+            if (! $disk->exists($relative) || $disk->size($relative) < 1) {
+                return [];
             }
 
-            $out[] = [
+            return [[
                 'path' => $relative,
-                'name' => basename($relative),
+                'name' => $safeName,
                 'content_type' => 'application/pdf',
-            ];
+            ]];
+        } catch (\Throwable) {
+            return [];
         }
-
-        return $out;
     }
 
     /**
@@ -201,9 +244,20 @@ final class IncomingFineReplySender
 
         $out = [];
         $agrNo = trim((string) ($log->agr_no ?? ''));
+        $reference = trim((string) ($log->reference ?? ''));
         foreach ($files as $file) {
             $rawName = basename(str_replace('\\', '/', (string) ($file['name'] ?? 'rnt.pdf')));
             $rawName = preg_replace('/[\/\\\\:*?"<>|]+/', '-', $rawName) ?: 'rnt.pdf';
+            $lower = strtolower($rawName);
+            // Contracts only — skip photos / screenshots from the rental Dropzone.
+            if (! str_ends_with($lower, '.pdf')) {
+                continue;
+            }
+            // Skip the fine notice copy that was uploaded into Wheelsys rental attachments.
+            if ($reference !== '' && str_contains($lower, strtolower($reference))) {
+                continue;
+            }
+
             if ($agrNo !== '' && ! str_contains($rawName, $agrNo)) {
                 $ext = pathinfo($rawName, PATHINFO_EXTENSION);
                 $stem = pathinfo($rawName, PATHINFO_FILENAME);
@@ -227,9 +281,50 @@ final class IncomingFineReplySender
         }
 
         if ($out === []) {
-            throw new RuntimeException('Could not prepare rental contract attachments for Julianus reply.');
+            throw new RuntimeException(
+                'Could not prepare rental contract PDF attachments for Julianus reply '
+                .'(Wheelsys rental had no usable contract PDF).'
+            );
         }
 
         return $out;
+    }
+
+    /**
+     * Dry-run: resolve notice + RNT attachments that would be sent (no email).
+     *
+     * @param  array<string, mixed>  $draft
+     * @return array{
+     *     notice: list<array{name:string,bytes:int}>,
+     *     contracts: list<array{name:string,bytes:int}>,
+     *     requires_contract: bool
+     * }
+     */
+    public function previewAttachments(array $draft, FineProcessLog $log): array
+    {
+        $notice = [];
+        foreach ($this->originalNoticeAttachments($log) as $file) {
+            $notice[] = [
+                'name' => $file['name'],
+                'bytes' => (int) Storage::disk('local')->size($file['path']),
+            ];
+        }
+
+        $contracts = [];
+        $requires = $this->draftRequiresContract($draft, $log);
+        if ($requires) {
+            foreach ($this->rentalContractAttachments($log) as $file) {
+                $contracts[] = [
+                    'name' => $file['name'],
+                    'bytes' => (int) Storage::disk('local')->size($file['path']),
+                ];
+            }
+        }
+
+        return [
+            'notice' => $notice,
+            'contracts' => $contracts,
+            'requires_contract' => $requires,
+        ];
     }
 }

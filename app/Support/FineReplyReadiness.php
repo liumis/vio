@@ -34,11 +34,26 @@ final class FineReplyReadiness
         $sent = filled($log->email_sent_at);
         $missing = [];
 
-        if (! filled($log->vehicle)) {
+        $wheelsys = is_array($wheelsys) ? $wheelsys : self::wheelsysFromLog($log);
+        if (($wheelsys['driver'] ?? '') === '' && filled($log->driver_name)) {
+            $wheelsys['driver'] = $log->driver_name;
+        }
+        if (($wheelsys['vehicle'] ?? '') === '' && filled($log->vehicle)) {
+            $wheelsys['vehicle'] = $log->vehicle;
+        }
+        $party = (string) ($wheelsys['party'] ?? 'driver');
+
+        if (! filled($log->vehicle) && ! filled($wheelsys['vehicle'] ?? null)) {
             $missing[] = 'vehicle';
         }
-        if (! filled($log->driver_name)) {
-            $missing[] = 'driver';
+        $informeeName = trim((string) (
+            $wheelsys['driver']
+            ?? $wheelsys['corporate']
+            ?? $log->driver_name
+            ?? ''
+        ));
+        if ($informeeName === '') {
+            $missing[] = $party === 'corporate' ? 'company' : 'driver';
         }
         if (! filled($log->reference)) {
             $missing[] = 'reference';
@@ -65,37 +80,40 @@ final class FineReplyReadiness
             $channel = str_contains(strtolower((string) $authority->email_pattern), 'anr.gov')
                 ? 'epaslaugos'
                 : 'email';
-            if (! filled($authority->mail_template) && $channel === 'email') {
+            $templateEarly = app(IncomingFineReplyBuilder::class)->resolveMailTemplate($authority, $party);
+            if ($templateEarly === '' && $channel === 'email') {
                 $missing[] = 'mail_template';
             }
         } else {
             $missing[] = 'authority';
         }
 
-        $wheelsys = is_array($wheelsys) ? $wheelsys : self::wheelsysFromLog($log);
-        if (($wheelsys['driver'] ?? '') === '' && filled($log->driver_name)) {
-            $wheelsys['driver'] = $log->driver_name;
-        }
-        if (($wheelsys['vehicle'] ?? '') === '' && filled($log->vehicle)) {
-            $wheelsys['vehicle'] = $log->vehicle;
-        }
-
         // Same required template tokens as IncomingFineReplyBuilder::build().
         // Corporate informee (no physical Driver): birth date is not required.
-        $party = (string) ($wheelsys['party'] ?? 'driver');
-        if ($authority && filled($authority->mail_template)) {
-            $template = (string) $authority->mail_template;
-            $checks = [
-                '[%2%]' => ['driver', (string) ($wheelsys['driver'] ?? $log->driver_name ?? '')],
-                '[%4%]' => ['vehicle', (string) ($wheelsys['vehicle'] ?? $log->vehicle ?? '')],
-                '[%8%]' => ['email', (string) ($wheelsys['customer_email'] ?? '')],
-            ];
-            if ($party !== 'corporate') {
-                $checks['[%7%]'] = ['birth_date', (string) ($wheelsys['birth_date'] ?? '')];
-            }
-            foreach ($checks as $token => [$label, $value]) {
-                if (str_contains($template, $token) && trim($value) === '' && ! in_array($label, $missing, true)) {
-                    $missing[] = $label;
+        if ($authority) {
+            $template = app(IncomingFineReplyBuilder::class)->resolveMailTemplate($authority, $party);
+            if ($template !== '') {
+                $companyCode = trim((string) (
+                    $wheelsys['corporate_tax_id']
+                    ?? $wheelsys['driver_tax_id']
+                    ?? $wheelsys['company_code']
+                    ?? $wheelsys['corporate_code']
+                    ?? ''
+                ));
+                $checks = [
+                    '[%2%]' => [$party === 'corporate' ? 'company' : 'driver', $informeeName],
+                    '[%4%]' => ['vehicle', (string) ($wheelsys['vehicle'] ?? $log->vehicle ?? '')],
+                    '[%8%]' => ['email', (string) ($wheelsys['customer_email'] ?? '')],
+                ];
+                if ($party !== 'corporate') {
+                    $checks['[%7%]'] = ['birth_date', (string) ($wheelsys['birth_date'] ?? '')];
+                } else {
+                    $checks['[%13%]'] = ['company_code', $companyCode];
+                }
+                foreach ($checks as $token => [$label, $value]) {
+                    if (str_contains($template, $token) && trim($value) === '' && ! in_array($label, $missing, true)) {
+                        $missing[] = $label;
+                    }
                 }
             }
         }
@@ -114,10 +132,11 @@ final class FineReplyReadiness
             }
         }
 
-        // Julianus (and flagged authorities): rental contract (RNT) must be tracked.
+        // Julianus (and flagged authorities): rental contract (RNT) must be tracked + fetchable.
         if ($authority && $authority->requiresContract()) {
             $agrNo = trim((string) ($wheelsys['agr_no'] ?? $log->agr_no ?? ''));
-            if ($agrNo === '' && ! in_array('contract', $missing, true)) {
+            $rentalId = $wheelsys['id'] ?? $log->rental_id ?? null;
+            if (($agrNo === '' || ! filled($rentalId)) && ! in_array('contract', $missing, true)) {
                 $missing[] = 'contract';
             }
         }
@@ -176,10 +195,12 @@ final class FineReplyReadiness
         $map = [
             'vehicle' => 'Vehicle / plate',
             'driver' => 'Driver name',
+            'company' => 'Company name',
+            'company_code' => 'Company code',
             'reference' => 'Reference / ticket no.',
             'ticket_date' => 'Ticket date',
             'birth_date' => 'Driver birth date',
-            'email' => 'Driver email',
+            'email' => 'Email',
             'mail_template' => 'Authority mail template',
             'authority' => 'Authority match',
             'authority_to' => 'Authority To email',
@@ -209,7 +230,7 @@ final class FineReplyReadiness
             return 'ok';
         }
 
-        $critical = ['vehicle', 'driver', 'reference', 'authority', 'authority_to', 'mail_template', 'ticket_date', 'contract'];
+        $critical = ['vehicle', 'driver', 'company', 'reference', 'authority', 'authority_to', 'mail_template', 'ticket_date', 'contract'];
         foreach ($missing as $key) {
             if (in_array($key, $critical, true)) {
                 return 'error';

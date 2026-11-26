@@ -46,7 +46,7 @@ final class MarkSignService
             throw new Exception("Could not read PDF: {$fullPath}");
         }
 
-        $response = Http::timeout(90)
+        $response = Http::timeout(HttpTimeouts::long())
             ->asMultipart()
             ->post("{$this->baseUrl}/v2/document/upload", [
                 ['name' => 'access_token', 'contents' => $this->token],
@@ -84,7 +84,7 @@ final class MarkSignService
      */
     public function getDocumentStatus(string $docUuid): array
     {
-        $response = Http::timeout(30)->post("{$this->baseUrl}/document/{$docUuid}/signers", [
+        $response = Http::timeout(HttpTimeouts::default())->post("{$this->baseUrl}/document/{$docUuid}/signers", [
             'access_token' => $this->token,
         ]);
 
@@ -97,7 +97,7 @@ final class MarkSignService
 
     public function downloadSignedDocument(string $docUuid, string $purpose = 'chargeback'): ?string
     {
-        $response = Http::timeout(90)->get("{$this->baseUrl}/document/{$docUuid}/download", [
+        $response = Http::timeout(HttpTimeouts::long())->get("{$this->baseUrl}/document/{$docUuid}/download", [
             'access_token' => $this->token,
         ]);
 
@@ -127,7 +127,7 @@ final class MarkSignService
             'signer_email' => $signer['email'] ?? null,
         ]);
 
-        $response = Http::timeout(60)->post("{$this->baseUrl}/v2/document/generate-temporary-signing-link", [
+        $response = Http::timeout(HttpTimeouts::long())->post("{$this->baseUrl}/v2/document/generate-temporary-signing-link", [
             'access_token' => $this->token,
             'documents' => [(string) $docUuid],
             'callback_url' => $callbackUrl,

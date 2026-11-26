@@ -107,7 +107,7 @@ final class WheelsysLoginBridge
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_TIMEOUT => 20,
+            CURLOPT_TIMEOUT => HttpTimeouts::short(),
             CURLOPT_USERAGENT => 'Mozilla/5.0 (compatible; SitGo-VIO/1.0)',
         ]);
 

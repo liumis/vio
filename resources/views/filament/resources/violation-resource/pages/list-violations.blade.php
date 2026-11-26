@@ -5,7 +5,7 @@
         .vio-v-tab.is-active { background:#fff; color:#0f172a; box-shadow:0 1px 2px rgba(15,23,42,.06), 0 0 0 1px rgba(226,232,240,.9); }
         .vio-acc-day { border-radius:16px; background:#fff; border:1px solid #cbd5e1; box-shadow:0 10px 28px rgba(34,58,78,.07); overflow:hidden; }
         .vio-acc-day + .vio-acc-day { margin-top:14px; }
-        .vio-acc-day > .vio-acc-head { width:100%; display:flex; align-items:center; gap:12px; text-align:left; padding:16px 18px; background:linear-gradient(180deg,#f8fafc 0%,#eef2f7 100%); border:0; cursor:pointer; }
+        .vio-acc-day > .vio-acc-head { width:100%; display:flex; align-items:center; gap:12px; text-align:left; padding:16px 18px; background:#f8fafc; border:0; cursor:pointer; }
         .vio-acc-day > .vio-acc-head:hover { background:#e8eef5; }
         .vio-acc-day-body { padding:10px 12px 12px; background:#f8fafc; border-top:1px solid #e2e8f0; }
         .vio-acc { border-radius:14px; background:#fff; border:1px solid #e2e8f0; box-shadow:0 4px 14px rgba(34,58,78,.04); overflow:hidden; }
@@ -46,6 +46,35 @@
         }
         .vio-row-to-send td { background:#fff5f5 !important; }
         .vio-row-to-send:hover td { background:#fee2e2 !important; }
+        .vio-row-not-imported td {
+            background:#fff7ed !important;
+            border-bottom-color:#fed7aa !important;
+        }
+        .vio-row-not-imported td:first-child {
+            box-shadow: inset 4px 0 0 #ea580c;
+        }
+        .vio-row-not-imported:hover td { background:#ffedd5 !important; }
+        .vio-row-imported td {
+            background:#f8fafc !important;
+            color:#64748b;
+        }
+        .vio-row-imported:hover td { background:#f1f5f9 !important; }
+        .vio-row-imported .vio-chip-ok { opacity:.85; }
+        .vio-chip-awaiting {
+            background:#ffedd5; color:#9a3412; border:1px solid #fb923c;
+            font-weight:800; letter-spacing:.01em;
+        }
+        .vio-acc-pending {
+            border-color:#fdba74;
+            box-shadow:0 4px 14px rgba(234,88,12,.08);
+        }
+        .vio-acc-pending > .vio-acc-head { background:#fff7ed; }
+        .vio-acc-pending > .vio-acc-head:hover { background:#ffedd5; }
+        .vio-not-imported-badge {
+            flex-shrink:0; font-size:11px; font-weight:800; border-radius:999px;
+            padding:2px 9px; line-height:1.35; white-space:nowrap;
+            background:#ffedd5; color:#9a3412; border:1px solid #fb923c;
+        }
         .vio-col-authority-email { min-width: 7.5rem; }
         .vio-footer-bar {
             z-index: 40 !important;
@@ -55,22 +84,27 @@
             -webkit-backdrop-filter: blur(10px);
             backdrop-filter: blur(10px);
         }
+        [x-cloak] { display: none !important; }
     </style>
 
+    {{-- Keep both layouts mounted: Filament table breaks if swapped in/out via @if. --}}
+    <div x-data="{ mode: $wire.entangle('browseMode') }">
     <div class="vio-v-tabs" role="tablist" aria-label="Imported layout">
         <button
             type="button"
-            class="vio-v-tab {{ $browseMode === 'days' ? 'is-active' : '' }}"
-            wire:click="setBrowseMode('days')"
+            class="vio-v-tab"
+            :class="mode === 'days' && 'is-active'"
+            @click="mode = 'days'"
         >By import day</button>
         <button
             type="button"
-            class="vio-v-tab {{ $browseMode === 'table' ? 'is-active' : '' }}"
-            wire:click="setBrowseMode('table')"
+            class="vio-v-tab"
+            :class="mode === 'table' && 'is-active'"
+            @click="mode = 'table'"
         >Table</button>
     </div>
 
-    @if ($browseMode === 'days')
+    <div x-show="mode === 'days'">
         @php $dayGroups = $this->violationDayGroups; @endphp
         @if ($dayGroups === [])
             <p class="text-sm text-gray-500">No imported fines yet.</p>
@@ -80,7 +114,7 @@
                     $dayKey = (string) $day['key'];
                     $dayOpen = $this->isViolationGroupOpen($dayKey);
                 @endphp
-                <div wire:key="vday-{{ $dayKey }}" @class(['vio-acc-day', 'vio-acc-open' => $dayOpen])>
+                <div wire:key="vday-{{ $dayKey }}" @class(['vio-acc-day', 'vio-acc-open' => $dayOpen, 'vio-acc-pending' => ($day['not_imported_count'] ?? 0) > 0])>
                     <button type="button" class="vio-acc-head" wire:click="toggleViolationGroup(@js($dayKey))">
                         <svg class="vio-acc-chevron" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                             <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z" clip-rule="evenodd" />
@@ -92,12 +126,19 @@
                         @if (! empty($day['imported_at_label']))
                             <span class="vio-acc-imported-when">{{ $day['imported_at_label'] }}</span>
                         @endif
+                        @if (($day['not_imported_count'] ?? 0) > 0)
+                            <span class="vio-not-imported-badge" title="Still awaiting / missing in Wheelsys">
+                                {{ $day['not_imported_count'] }} not imported
+                            </span>
+                        @endif
                         @if (($day['to_send_count'] ?? 0) > 0)
                             <span class="vio-to-send-badge" title="Authority not informed">
                                 {{ $day['to_send_count'] }} not sent
                             </span>
                         @endif
-                        <span class="vio-acc-status">Imported</span>
+                        @if (($day['not_imported_count'] ?? 0) === 0)
+                            <span class="vio-acc-status">Imported</span>
+                        @endif
                         <span class="vio-acc-count">{{ $day['fine_count'] }}</span>
                     </button>
 
@@ -109,7 +150,7 @@
                                     $fileOpen = $this->isViolationGroupOpen($fileKey);
                                     $logs = $file['logs'];
                                 @endphp
-                                <div wire:key="vfile-{{ $fileKey }}" @class(['vio-acc', 'vio-acc-open' => $fileOpen])>
+                                <div wire:key="vfile-{{ $fileKey }}" @class(['vio-acc', 'vio-acc-open' => $fileOpen, 'vio-acc-pending' => ($file['not_imported_count'] ?? 0) > 0])>
                                     <button type="button" class="vio-acc-head" wire:click="toggleViolationGroup(@js($fileKey))">
                                         <svg class="vio-acc-chevron" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                                             <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z" clip-rule="evenodd" />
@@ -118,8 +159,13 @@
                                             <div class="vio-acc-title truncate">{{ $file['title'] }}</div>
                                             <div class="vio-acc-sub truncate">{{ $file['subtitle'] }}</div>
                                         </div>
-                                        @if (! empty($file['imported_at_label']))
+                                        @if (! empty($file['imported_at_label']) && ($file['not_imported_count'] ?? 0) === 0)
                                             <span class="vio-acc-imported-when">{{ $file['imported_at_label'] }}</span>
+                                        @endif
+                                        @if (($file['not_imported_count'] ?? 0) > 0)
+                                            <span class="vio-not-imported-badge" title="Still awaiting / missing in Wheelsys">
+                                                {{ $file['not_imported_count'] }} not imported
+                                            </span>
                                         @endif
                                         @if (($file['to_send_count'] ?? 0) > 0)
                                             <span class="vio-to-send-badge" title="Authority not informed">
@@ -188,14 +234,22 @@
                                                                 $isEpaslaugos = ($reply['channel'] ?? '') === 'epaslaugos';
                                                                 $needsAuthorityEmail = ! $isEpaslaugos && ! filled($log->email_sent_at);
                                                                 $bulkSendable = $this->rowIsBulkSendable($log);
+                                                                $isImported = $log->wheels_import_status === \App\Models\FineProcessLog::WHEELS_IMPORT_IMPORTED;
                                                                 $docUrl = $log->documentSharePointUrl();
+                                                                $rntUrl = $log->primaryRntContractSharePointUrl();
+                                                                $needsContract = $log->authority?->requiresContract() === true
+                                                                    || str_contains(mb_strtolower((string) ($log->authority_name ?? ''), 'UTF-8'), 'julianus');
                                                                 $tvUrl = filled($log->wheels_violation_id)
                                                                     ? \App\Support\WheelsysLoginBridge::trafficViolationUrl((string) $log->wheels_violation_id)
                                                                     : null;
                                                             @endphp
                                                             <tr
                                                                 wire:key="vrow-{{ $log->id }}"
-                                                                @class(['vio-row-to-send' => $needsAuthorityEmail])
+                                                                @class([
+                                                                    'vio-row-to-send' => $needsAuthorityEmail && $isImported,
+                                                                    'vio-row-not-imported' => ! $isImported,
+                                                                    'vio-row-imported' => $isImported && ! $needsAuthorityEmail,
+                                                                ])
                                                             >
                                                                 <td>
                                                                     <input
@@ -251,15 +305,15 @@
                                                                     @endif
                                                                 </td>
                                                                 <td>
-                                                                    @if ($log->wheels_import_status === \App\Models\FineProcessLog::WHEELS_IMPORT_IMPORTED)
+                                                                    @if ($isImported)
                                                                         <span class="vio-chip vio-chip-ok">Imported</span>
                                                                     @elseif ($log->wheels_import_status === \App\Models\FineProcessLog::WHEELS_IMPORT_MISSING)
-                                                                        <span class="vio-chip vio-chip-warn">Missing</span>
+                                                                        <span class="vio-chip vio-chip-warn" style="font-weight:800;">Missing in Wheels</span>
                                                                     @else
-                                                                        <span class="vio-chip vio-chip-sky">Awaiting</span>
+                                                                        <span class="vio-chip vio-chip-awaiting">Not imported</span>
                                                                     @endif
                                                                 </td>
-                                                                <td style="font-weight:800;color:#047857;font-variant-numeric:tabular-nums;white-space:nowrap;">
+                                                                <td style="font-weight:800;color:{{ $isImported ? '#047857' : '#9a3412' }};font-variant-numeric:tabular-nums;white-space:nowrap;">
                                                                     {{ optional($log->wheels_imported_at)->timezone(config('app.timezone'))?->format('Y-m-d H:i') ?? '—' }}
                                                                 </td>
                                                                 <td style="font-weight:700;">{{ $log->vehicle ?: '—' }}</td>
@@ -295,6 +349,15 @@
                                                                     @if ($docUrl)
                                                                         <x-filament::button tag="a" size="xs" color="gray" :href="$docUrl" target="_blank" rel="noopener noreferrer">
                                                                             Doc
+                                                                        </x-filament::button>
+                                                                    @endif
+                                                                    @if ($rntUrl)
+                                                                        <x-filament::button tag="a" size="xs" color="warning" :href="$rntUrl" target="_blank" rel="noopener noreferrer">
+                                                                            Contract
+                                                                        </x-filament::button>
+                                                                    @elseif ($needsContract && filled($log->rental_id))
+                                                                        <x-filament::button size="xs" color="warning" wire:click="fetchRntDocs({{ (int) $log->id }})" wire:loading.attr="disabled">
+                                                                            Fetch contract
                                                                         </x-filament::button>
                                                                     @endif
                                                                     @if ($tvUrl)
@@ -339,7 +402,10 @@
             </div>
             <div style="height: 4.5rem;"></div>
         @endif
-    @else
+    </div>
+
+    <div x-show="mode === 'table'" x-cloak wire:key="imported-filament-table">
         {{ $this->table }}
-    @endif
+    </div>
+    </div>
 </x-filament-panels::page>

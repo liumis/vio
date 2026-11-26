@@ -32,7 +32,7 @@ final class OcrSpaceClient
         $extension = strtoupper((string) pathinfo($absoluteFilePath, PATHINFO_EXTENSION)) ?: 'PDF';
 
         try {
-            $response = Http::timeout(90)
+            $response = Http::timeout(HttpTimeouts::long())
                 ->asMultipart()
                 ->post('https://api.ocr.space/parse/image', [
                     ['name' => 'apikey', 'contents' => $apiKey],

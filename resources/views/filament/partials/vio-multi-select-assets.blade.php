@@ -39,12 +39,12 @@
     .vio-ms { position: relative; }
     .vio-ms-control {
         position: relative;
-        width: 100%; min-height: 42px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-        padding: 8px 28px 8px 10px; border: 1px solid #cbd5e1; border-radius: 0.5rem;
-        background: #fff; text-align: left; cursor: pointer; box-shadow: 0 1px 2px rgba(15,23,42,.04);
+        width: 100%; min-height: 44px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+        padding: 8px 28px 8px 10px; border: 2px solid #64748b; border-radius: 0.5rem;
+        background: #fff; text-align: left; cursor: pointer; box-shadow: 0 2px 6px rgba(15,23,42,.08);
     }
-    .vio-ms-control:hover { border-color: #94a3b8; }
-    .vio-ms-placeholder { color: #94a3b8; font-size: 13px; }
+    .vio-ms-control:hover { border-color: #0f172a; }
+    .vio-ms-placeholder { color: #475569; font-size: 13px; font-weight: 600; }
     .vio-ms-chip {
         display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
         padding: 2px 8px; border-radius: 999px; background: #eef2f6; color: #223a4e;

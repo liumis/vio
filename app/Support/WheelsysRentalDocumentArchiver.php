@@ -114,9 +114,10 @@ final class WheelsysRentalDocumentArchiver
         }
 
         $workflow = is_array($log->workflow) ? $log->workflow : [];
+        // Append RNT urls after the fine notice — do not push them in front of Doc.
         $allUrls = is_array($log->sharepoint_urls) ? array_values($log->sharepoint_urls) : [];
         foreach ($urls as $url) {
-            array_unshift($allUrls, $url);
+            $allUrls[] = $url;
         }
         $allUrls = array_values(array_unique(array_filter(
             $allUrls,

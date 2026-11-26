@@ -38,7 +38,7 @@ class MicrosoftGraphMailer
         }
 
         $tokenResponse = Http::asForm()
-            ->timeout(20)
+            ->timeout(HttpTimeouts::short())
             ->post("https://login.microsoftonline.com/{$tenantId}/oauth2/v2.0/token", [
                 'client_id' => $clientId,
                 'client_secret' => $clientSecret,
@@ -111,7 +111,7 @@ class MicrosoftGraphMailer
         }
 
         $sendResponse = Http::withToken($accessToken)
-            ->timeout(60)
+            ->timeout(HttpTimeouts::long())
             ->post('https://graph.microsoft.com/v1.0/users/'.rawurlencode($fromEmail).'/sendMail', [
                 'message' => $message,
                 'saveToSentItems' => true,

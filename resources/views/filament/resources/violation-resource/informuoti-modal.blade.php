@@ -471,6 +471,51 @@
                             </p>
                         @endif
                     </div>
+
+                    @php
+                        $attachPreview = is_array($sendAttachmentPreview ?? null) ? $sendAttachmentPreview : null;
+                        $attachNotice = is_array($attachPreview['notice'] ?? null) ? $attachPreview['notice'] : [];
+                        $attachContracts = is_array($attachPreview['contracts'] ?? null) ? $attachPreview['contracts'] : [];
+                        $attachError = trim((string) ($attachPreview['error'] ?? ''));
+                    @endphp
+                    @if ($requiresContract || $attachNotice !== [] || $attachContracts !== [] || $attachError !== '')
+                        <div class="rounded-xl bg-amber-50 ring-1 ring-amber-200" style="padding: 14px; margin-top: 12px;">
+                            <div class="flex flex-wrap items-center justify-between gap-2" style="margin: 0 0 8px;">
+                                <p class="text-xs font-semibold uppercase text-amber-900" style="margin: 0;">Attachments on send</p>
+                                <div class="flex flex-wrap gap-2">
+                                    <x-filament::button size="xs" color="gray" wire:click="refreshSendAttachmentPreview" wire:loading.attr="disabled">
+                                        Retest attach
+                                    </x-filament::button>
+                                    @if ($requiresContract)
+                                        <x-filament::button size="xs" color="warning" wire:click="fetchRntDocsForInformuoti" wire:loading.attr="disabled">
+                                            Fetch contract → SharePoint
+                                        </x-filament::button>
+                                    @endif
+                                </div>
+                            </div>
+                            @if ($attachError !== '')
+                                <p class="text-xs" style="color:#b91c1c;margin:0 0 8px;">{{ $attachError }}</p>
+                            @endif
+                            <div class="text-xs text-slate-700" style="line-height:1.45;">
+                                <div><strong>Notice:</strong>
+                                    @if ($attachNotice === [])
+                                        <span style="color:#b91c1c;">none found</span>
+                                    @else
+                                        {{ collect($attachNotice)->pluck('name')->implode(', ') }}
+                                    @endif
+                                </div>
+                                <div style="margin-top:4px;"><strong>Contract (RNT):</strong>
+                                    @if (! $requiresContract)
+                                        <span style="color:#64748b;">not required</span>
+                                    @elseif ($attachContracts === [])
+                                        <span style="color:#b91c1c;">none — fetch / check rental attachments</span>
+                                    @else
+                                        {{ collect($attachContracts)->pluck('name')->implode(', ') }}
+                                    @endif
+                                </div>
+                            </div>
+                        </div>
+                    @endif
                 </div>
 
                 <div style="padding: 16px 24px; border-bottom: 1px solid #eef2f7;">

@@ -182,6 +182,8 @@ final class IncomingFineMailScanner
      */
     public function scan(int $days = 3, int $top = 0): array
     {
+        HttpTimeouts::extendPhpRuntime();
+
         // Longer look-backs need a larger Graph page budget (paginated in MicrosoftGraphInbox).
         if ($top <= 0) {
             $top = $days >= 60 ? 1500 : ($days >= 30 ? 800 : 200);
@@ -234,18 +236,25 @@ final class IncomingFineMailScanner
             $ignoredSender = $this->isIgnoredSender($message['from_email']);
             $subjectHit = $this->looksLikeFine($message['subject']);
 
-            // Never treat internal/vendor domains as the issuing Authority.
+            // Only configured Authorities (email_pattern). Never treat internal/vendor domains as issuer.
             $authority = (! $ignoredSender && $message['from_email'] !== '')
                 ? AuthorityMatcher::findForEmail($message['from_email'])
                 : null;
 
-            // Forwards / internal relays: guess Authority from subject when sender domain is unknown.
+            // Internal forwards only: map to Authority from subject/body hints (must still resolve to a seeded Authority).
             $subjectAuthority = null;
-            if ($authority === null && $subjectHit) {
-                $subjectAuthority = AuthorityMatcher::findFromHaystack((string) $message['subject']);
+            if ($authority === null && $ignoredSender) {
+                $subjectAuthority = AuthorityMatcher::findFromHaystack(
+                    trim((string) ($message['subject'] ?? '')."\n".(string) ($message['preview'] ?? ''))
+                );
                 if ($subjectAuthority !== null) {
                     $authority = $subjectAuthority;
                 }
+            }
+
+            // Drop everything that is not from a known Authority (no keyword-only inbox noise).
+            if ($authority === null) {
+                continue;
             }
 
             // Legal Balance: skip debt reminders only, not every letter from that domain.
@@ -268,18 +277,8 @@ final class IncomingFineMailScanner
                 continue;
             }
 
-            // Authority match always wins; keyword match for unknown / forwarded fine notices.
-            if ($authority === null && ! $subjectHit) {
-                continue;
-            }
-
-            // Internal forwards without attachments cannot be matched to an issuing authority.
-            if ($ignoredSender && $authority === null && empty($message['has_attachments'])) {
-                continue;
-            }
-
             $reasons = [];
-            if ($authority !== null && $subjectAuthority === null && ! $ignoredSender) {
+            if ($subjectAuthority === null && ! $ignoredSender) {
                 $reasons[] = 'sender';
             }
             if ($subjectAuthority !== null) {

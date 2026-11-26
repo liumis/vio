@@ -20,7 +20,7 @@ final class MicrosoftGraphInbox
         }
 
         $tokenResponse = Http::asForm()
-            ->timeout(20)
+            ->timeout(HttpTimeouts::short())
             ->post("https://login.microsoftonline.com/{$tenantId}/oauth2/v2.0/token", [
                 'client_id' => $clientId,
                 'client_secret' => $clientSecret,
@@ -120,7 +120,7 @@ final class MicrosoftGraphInbox
         while ($url !== '' && count($out) < $maxMessages && $guards < 40) {
             $guards++;
             $response = Http::withToken($token)
-                ->timeout(60)
+                ->timeout(HttpTimeouts::long())
                 ->withHeaders([
                     'Prefer' => 'outlook.body-content-type="text"',
                 ])
@@ -201,7 +201,7 @@ final class MicrosoftGraphInbox
                 .'&$top='.max(1, min(50, $perDomain));
 
             $response = Http::withToken($token)
-                ->timeout(60)
+                ->timeout(HttpTimeouts::long())
                 ->withHeaders(['ConsistencyLevel' => 'eventual'])
                 ->get($url);
 
@@ -265,7 +265,7 @@ final class MicrosoftGraphInbox
             .'?$select=body,bodyPreview';
 
         $response = Http::withToken($this->accessToken())
-            ->timeout(40)
+            ->timeout(HttpTimeouts::default())
             ->withHeaders([
                 'Prefer' => 'outlook.body-content-type="text"',
             ])
@@ -298,7 +298,7 @@ final class MicrosoftGraphInbox
             .'?$select=body,bodyPreview';
 
         $response = Http::withToken($this->accessToken())
-            ->timeout(40)
+            ->timeout(HttpTimeouts::default())
             ->withHeaders([
                 'Prefer' => 'outlook.body-content-type="html"',
             ])
@@ -341,7 +341,7 @@ final class MicrosoftGraphInbox
             .'/attachments?$select=id,name,contentType,size,isInline';
 
         $response = Http::withToken($this->accessToken())
-            ->timeout(40)
+            ->timeout(HttpTimeouts::default())
             ->get($url);
 
         if (! $response->successful()) {
@@ -389,7 +389,7 @@ final class MicrosoftGraphInbox
             .'/attachments/'.rawurlencode($attachmentId);
 
         $response = Http::withToken($this->accessToken())
-            ->timeout(60)
+            ->timeout(HttpTimeouts::long())
             ->get($url);
 
         if (! $response->successful()) {

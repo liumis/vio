@@ -48,8 +48,15 @@ class AuthorityResource extends Resource
                 ->maxLength(255),
             Forms\Components\Textarea::make('mail_template')
                 ->required()
-                ->label('Mail template')
+                ->label('Mail template (Driver)')
                 ->rows(8)
+                ->helperText('Naudojamas kai Wheelsys informee = DRIVER. Tokenai: [%1%] ref, [%2%] vardas, [%4%] auto, [%5%] vair. paž., [%7%] gimimo data, [%8%] el. paštas, [%9%] adresas, [%10%] tel., [%11%] paž. data, [%12%] valstybė.')
+                ->columnSpanFull(),
+            Forms\Components\Textarea::make('mail_template_corporate')
+                ->label('Mail template (Corporate)')
+                ->rows(8)
+                ->nullable()
+                ->helperText('Naudojamas kai informee = CORPORATE (nėra fizinio Driver). Tokenai: [%2%] įmonė, [%4%] auto, [%8%] el. paštas, [%9%] adresas, [%10%] tel., [%13%] įmonės kodas. Jei tuščia — naudojamas Driver šablonas.')
                 ->columnSpanFull(),
             Forms\Components\TextInput::make('informavimo_terminas')
                 ->label('Informavimo terminas')
@@ -101,10 +108,16 @@ class AuthorityResource extends Resource
                     ->searchable()
                     ->sortable(),
                 Tables\Columns\TextColumn::make('mail_template')
-                    ->label('Mail template')
+                    ->label('Mail (Driver)')
                     ->searchable()
-                    ->limit(60)
+                    ->limit(40)
                     ->tooltip(fn (Authority $record): string => (string) $record->mail_template),
+                Tables\Columns\TextColumn::make('mail_template_corporate')
+                    ->label('Mail (Corporate)')
+                    ->searchable()
+                    ->limit(40)
+                    ->placeholder('—')
+                    ->tooltip(fn (Authority $record): string => (string) ($record->mail_template_corporate ?? '')),
                 Tables\Columns\TextColumn::make('informavimo_terminas')
                     ->label('Informavimo terminas')
                     ->formatStateUsing(function (?int $state, Authority $record): string {

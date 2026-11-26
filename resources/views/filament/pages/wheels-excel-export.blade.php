@@ -3,8 +3,7 @@
         .vio-import-hero {
             position: relative; overflow: hidden; border-radius: 16px;
             background:
-                radial-gradient(120% 140% at 100% 0%, rgba(46,204,113,.12), transparent 45%),
-                linear-gradient(135deg, #1a2d3d 0%, #223a4e 48%, #2a4a63 100%);
+                #223a4e;
             color: #e8eef3; box-shadow: 0 18px 40px rgba(34,58,78,.18);
             padding: 20px 24px; margin-bottom: 1.25rem;
         }
@@ -101,7 +100,7 @@
         }
         .vio-acc-day + .vio-acc-day { margin-top: 14px; }
         .vio-acc-day > .vio-acc-head {
-            background: linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+            background: #f8fafc;
             padding: 16px 18px;
         }
         .vio-acc-day > .vio-acc-head:hover { background: #e8eef5; }

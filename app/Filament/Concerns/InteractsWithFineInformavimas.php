@@ -9,6 +9,7 @@ use App\Support\IncomingFineReplyBuilder;
 use App\Support\IncomingFineReplySender;
 use App\Support\MicrosoftGraphInbox;
 use App\Support\WheelsysClient;
+use App\Support\WheelsysRentalDocumentArchiver;
 use App\Support\WheelsysTrafficViolationExcelExporter;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Auth;
@@ -53,6 +54,13 @@ trait InteractsWithFineInformavimas
 
     /** @var array{ready:bool,sent:bool,channel:string,missing:list<string>,label:string,detail:string,missing_labels:list<string>,severity:string}|null */
     public ?array $informuotiReadiness = null;
+
+    /**
+     * Files that would be attached on Send (notice + RNT contracts).
+     *
+     * @var array{notice:list<array{name:string,bytes:int}>,contracts:list<array{name:string,bytes:int}>,requires_contract:bool,error:?string}|null
+     */
+    public ?array $sendAttachmentPreview = null;
 
     public string $epaslaugosPersonType = EpaslaugosAssist::PERSON_LT_NATURAL;
 
@@ -139,6 +147,7 @@ trait InteractsWithFineInformavimas
         );
         $this->showTemplateEditor = false;
         $this->loadInformuotiSourceMaterials($log);
+        $this->refreshSendAttachmentPreview();
         $this->showInformuoti = true;
     }
 
@@ -156,6 +165,62 @@ trait InteractsWithFineInformavimas
         $this->sourceExtractText = '';
         $this->sourceFiles = [];
         $this->informuotiReadiness = null;
+        $this->sendAttachmentPreview = null;
+    }
+
+    public function refreshSendAttachmentPreview(): void
+    {
+        $this->sendAttachmentPreview = null;
+        if (! $this->informuotiLogId || ! is_array($this->previewDraft)) {
+            return;
+        }
+
+        $log = FineProcessLog::query()->with('authority')->find($this->informuotiLogId);
+        if (! $log) {
+            return;
+        }
+
+        try {
+            $this->sendAttachmentPreview = app(IncomingFineReplySender::class)
+                ->previewAttachments($this->previewDraft, $log);
+            $this->sendAttachmentPreview['error'] = null;
+        } catch (Throwable $e) {
+            $this->sendAttachmentPreview = [
+                'notice' => [],
+                'contracts' => [],
+                'requires_contract' => ! empty($this->previewDraft['requires_contract']),
+                'error' => $e->getMessage(),
+            ];
+        }
+    }
+
+    public function fetchRntDocsForInformuoti(): void
+    {
+        if (! $this->informuotiLogId) {
+            return;
+        }
+
+        $log = FineProcessLog::query()->find($this->informuotiLogId);
+        if (! $log) {
+            return;
+        }
+
+        try {
+            $result = app(WheelsysRentalDocumentArchiver::class)->archiveForLog($log, force: true);
+            Notification::make()
+                ->success()
+                ->title('RNT docs saved')
+                ->body($result['count'].' file(s) → '.$result['folder'])
+                ->send();
+            $this->refreshSendAttachmentPreview();
+        } catch (Throwable $e) {
+            Notification::make()
+                ->danger()
+                ->title('RNT fetch failed')
+                ->body($e->getMessage())
+                ->persistent()
+                ->send();
+        }
     }
 
     public function openTemplateEditor(): void
@@ -342,19 +407,28 @@ trait InteractsWithFineInformavimas
             $this->previewDraft = $draft;
 
             $missing = is_array($draft['missing_fields'] ?? null) ? $draft['missing_fields'] : [];
-            if (in_array('contract', $missing, true) || (! empty($draft['requires_contract']) && ! filled($draft['agr_no'] ?? null))) {
+            $log = $this->informuotiLogId
+                ? FineProcessLog::query()->find($this->informuotiLogId)
+                : null;
+
+            if (
+                in_array('contract', $missing, true)
+                || (
+                    ! empty($draft['requires_contract'])
+                    && (
+                        ! filled($draft['agr_no'] ?? null)
+                        || ($log !== null && ! filled($log->rental_id))
+                    )
+                )
+            ) {
                 Notification::make()
                     ->danger()
                     ->title('Contract (RNT) required')
-                    ->body('Julianus: pick a Wheelsys rental so the contract number is set before sending.')
+                    ->body('Julianus: pick a Wheelsys rental so RNT + rental_id are set (needed to open/attach the contract PDF).')
                     ->send();
 
                 return;
             }
-
-            $log = $this->informuotiLogId
-                ? FineProcessLog::query()->find($this->informuotiLogId)
-                : null;
 
             $log = app(IncomingFineReplySender::class)->send($draft, $log);
             $this->informuotiLogId = $log->id;
@@ -513,6 +587,13 @@ trait InteractsWithFineInformavimas
             'ticket_date' => filled($row['ticket_date'] ?? null) ? (string) $row['ticket_date'] : $log->ticket_date,
             'workflow' => $workflow,
         ])->save();
+
+        if (is_array($this->previewDraft)) {
+            $this->previewDraft['agr_no'] = $log->agr_no;
+            $this->previewDraft['requires_contract'] = $log->authority?->requiresContract()
+                ?? ! empty($this->previewDraft['requires_contract']);
+            $this->refreshSendAttachmentPreview();
+        }
     }
 
     private function ticketMomentForSearchInput(mixed $datetime, mixed $date, mixed $time): ?string

@@ -6,6 +6,7 @@ use App\Models\Authority;
 use App\Models\EmailSetting;
 use App\Models\FineProcessLog;
 use App\Support\EpaslaugosAssist;
+use App\Support\InformavimoTerminas;
 use App\Support\IncomingFineLookup;
 use App\Support\IncomingFineMailboxFolders;
 use App\Support\IncomingFineMailScanner;
@@ -164,8 +165,14 @@ class IncomingFines extends Page implements HasForms
     }
 
     /**
-     * '' | asc | desc — Status column sort (click header to cycle).
+     * Column sort: from|subject|authority|informavimas|plate|status (empty = default order).
      */
+    public string $listSortColumn = '';
+
+    /** '' | asc | desc */
+    public string $listSortDir = '';
+
+    /** @deprecated Use listSortColumn === 'status' */
     public string $statusSort = '';
 
     /**
@@ -223,6 +230,8 @@ class IncomingFines extends Page implements HasForms
     {
         $this->data['authority_ids'] = [];
         $this->data['statuses'] = [];
+        $this->listSortColumn = '';
+        $this->listSortDir = '';
         $this->statusSort = '';
     }
 
@@ -232,13 +241,49 @@ class IncomingFines extends Page implements HasForms
         $this->clearListFilters();
     }
 
+    public function toggleListSort(string $column): void
+    {
+        $column = trim($column);
+        $allowed = ['from', 'subject', 'authority', 'informavimas', 'plate', 'status'];
+        if (! in_array($column, $allowed, true)) {
+            return;
+        }
+
+        if ($this->listSortColumn !== $column) {
+            $this->listSortColumn = $column;
+            $this->listSortDir = 'asc';
+        } else {
+            $this->listSortDir = match ($this->listSortDir) {
+                'asc' => 'desc',
+                'desc' => '',
+                default => 'asc',
+            };
+            if ($this->listSortDir === '') {
+                $this->listSortColumn = '';
+            }
+        }
+
+        $this->statusSort = $this->listSortColumn === 'status' ? $this->listSortDir : '';
+    }
+
+    /** @deprecated Use toggleListSort('status') */
     public function toggleStatusSort(): void
     {
-        $this->statusSort = match ($this->statusSort) {
-            'asc' => 'desc',
-            'desc' => '',
-            default => 'asc',
-        };
+        $this->toggleListSort('status');
+    }
+
+    public function listSortIcon(string $column): string
+    {
+        if ($this->listSortColumn !== $column || $this->listSortDir === '') {
+            return '↕';
+        }
+
+        return $this->listSortDir === 'asc' ? '↑' : '↓';
+    }
+
+    public function listSortActive(string $column): bool
+    {
+        return $this->listSortColumn === $column && $this->listSortDir !== '';
     }
 
     /**
@@ -285,8 +330,16 @@ class IncomingFines extends Page implements HasForms
             );
         }
 
-        if ($this->statusSort === 'asc' || $this->statusSort === 'desc') {
-            $order = [
+        // Migrate legacy statusSort if still set from an old Livewire snapshot.
+        if ($this->listSortColumn === '' && ($this->statusSort === 'asc' || $this->statusSort === 'desc')) {
+            $this->listSortColumn = 'status';
+            $this->listSortDir = $this->statusSort;
+        }
+
+        if ($this->listSortColumn !== '' && ($this->listSortDir === 'asc' || $this->listSortDir === 'desc')) {
+            $dir = $this->listSortDir === 'asc' ? 1 : -1;
+            $column = $this->listSortColumn;
+            $statusOrder = [
                 'new' => 1,
                 'needs_review' => 2,
                 'not_found' => 3,
@@ -296,14 +349,27 @@ class IncomingFines extends Page implements HasForms
                 'already_have_ready' => 7,
                 'already_have_prepared' => 8,
             ];
-            $dir = $this->statusSort === 'asc' ? 1 : -1;
+
             uasort(
                 $rows,
-                function (array $a, array $b) use ($order, $dir): int {
-                    $ra = $order[$this->rowStatusKey($a)] ?? 99;
-                    $rb = $order[$this->rowStatusKey($b)] ?? 99;
+                function (array $a, array $b) use ($column, $dir, $statusOrder): int {
+                    $cmp = match ($column) {
+                        'from' => strcasecmp(
+                            (string) (($a['from_name'] ?? '') !== '' ? $a['from_name'] : ($a['from_email'] ?? '')),
+                            (string) (($b['from_name'] ?? '') !== '' ? $b['from_name'] : ($b['from_email'] ?? ''))
+                        ) ?: strcmp((string) ($a['received_at'] ?? ''), (string) ($b['received_at'] ?? '')),
+                        'subject' => strcasecmp((string) ($a['subject'] ?? ''), (string) ($b['subject'] ?? '')),
+                        'authority' => strcasecmp((string) ($a['authority_name'] ?? ''), (string) ($b['authority_name'] ?? '')),
+                        'informavimas' => ($this->rowInformavimoSortKey($a) <=> $this->rowInformavimoSortKey($b)),
+                        'plate' => strcasecmp(
+                            (string) (($a['vehicle'] ?? '') !== '' ? $a['vehicle'] : ($a['driver_name'] ?? '')),
+                            (string) (($b['vehicle'] ?? '') !== '' ? $b['vehicle'] : ($b['driver_name'] ?? ''))
+                        ),
+                        'status' => (($statusOrder[$this->rowStatusKey($a)] ?? 99) <=> ($statusOrder[$this->rowStatusKey($b)] ?? 99)),
+                        default => 0,
+                    };
 
-                    return ($ra <=> $rb) * $dir;
+                    return $cmp * $dir;
                 }
             );
         }
@@ -311,8 +377,37 @@ class IncomingFines extends Page implements HasForms
         return $rows;
     }
 
+    /**
+     * Lower = more urgent (critical first when ascending). Done / none sort last.
+     *
+     * @param  array<string, mixed>  $row
+     */
+    private function rowInformavimoSortKey(array $row): int
+    {
+        $deadline = InformavimoTerminas::forAuthorityId(
+            isset($row['authority_id']) ? (int) $row['authority_id'] : null,
+            $row['received_at'] ?? ($row['received_at_local'] ?? null),
+            ! empty($row['email_sent']) || ! empty($row['epaslaugos_done']),
+        );
+        $level = (string) ($deadline['level'] ?? 'none');
+
+        $levelRank = match ($level) {
+            'critical' => 1,
+            'warn' => 2,
+            'ok' => 3,
+            'done' => 8,
+            default => 9,
+        };
+        $days = $deadline['days_left'];
+        $dayPart = is_int($days) ? max(0, min(500, $days)) : 500;
+
+        return ($levelRank * 1000) + $dayPart;
+    }
+
     public function fetch(): void
     {
+        \App\Support\HttpTimeouts::extendPhpRuntime();
+
         $state = $this->form->getState();
         $days = max(1, min(180, (int) ($state['days'] ?? 3)));
 
@@ -422,9 +517,11 @@ class IncomingFines extends Page implements HasForms
     }
 
     /**
+     * Selectable message ids in the current filtered inbox list (unlocked rows only).
+     *
      * @return list<string>
      */
-    private function selectableFilteredIds(): array
+    public function selectableFilteredIds(): array
     {
         $ids = [];
         foreach ($this->filteredResults as $row) {
@@ -477,6 +574,7 @@ class IncomingFines extends Page implements HasForms
         $found = 0;
         $missing = 0;
         $errors = 0;
+        $gapTallies = [];
 
         foreach ($indexes as $index) {
             try {
@@ -485,18 +583,38 @@ class IncomingFines extends Page implements HasForms
                     $found++;
                 } else {
                     $missing++;
+                    foreach ((array) ($this->results[$index]['lookup_missing'] ?? []) as $gap) {
+                        $gap = trim((string) $gap);
+                        if ($gap === '') {
+                            continue;
+                        }
+                        $gapTallies[$gap] = ($gapTallies[$gap] ?? 0) + 1;
+                    }
                 }
             } catch (Throwable $e) {
                 $errors++;
                 $this->results[$index]['lookup_status'] = 'not_found';
                 $this->results[$index]['lookup_detail'] = $e->getMessage();
+                $this->results[$index]['lookup_missing'] = ['error'];
             }
+        }
+
+        $gapHint = '';
+        if ($gapTallies !== []) {
+            $labels = IncomingFineLookup::missingLabels();
+            arsort($gapTallies);
+            $parts = [];
+            foreach (array_slice($gapTallies, 0, 4, true) as $key => $count) {
+                $parts[] = ($labels[$key] ?? $key).($count > 1 ? " ×{$count}" : '');
+            }
+            $gapHint = ' · gaps: '.implode(', ', $parts);
         }
 
         $notification = Notification::make()
             ->title('Saved to VIO DB')
             ->body("Found {$found} · not found {$missing}"
                 .($errors > 0 ? " · errors {$errors}" : '')
+                .$gapHint
                 .' · next: Wheelsys import');
 
         if ($missing > 0 || $errors > 0) {
@@ -556,6 +674,9 @@ class IncomingFines extends Page implements HasForms
 
             $lookupDetail = $log->error
                 ?: trim(($log->agr_no ? $log->agr_no.' · ' : '').($log->driver_name ?: ''));
+            $lookupMissing = is_array($log->workflow['lookup_missing'] ?? null)
+                ? array_values(array_map('strval', $log->workflow['lookup_missing']))
+                : [];
             if ($lookup === 'needs_review') {
                 $ambiguous = is_array($log->workflow['ambiguous_drivers'] ?? null)
                     ? $log->workflow['ambiguous_drivers']
@@ -565,6 +686,19 @@ class IncomingFines extends Page implements HasForms
                     : (is_array($log->workflow['steps'][0] ?? null)
                         ? (string) ($log->workflow['steps'][0]['detail'] ?? 'Needs review — multiple drivers that day')
                         : 'Needs review — multiple drivers that day');
+                $lookupMissing = [];
+            } elseif ($lookup === 'not_found') {
+                if ($lookupMissing === []) {
+                    $lookupMissing = IncomingFineLookup::inferMissingFromLog($log);
+                }
+                $stepDetail = is_array($log->workflow['steps'][0] ?? null)
+                    ? trim((string) ($log->workflow['steps'][0]['detail'] ?? ''))
+                    : '';
+                if ($stepDetail !== '' && (str_starts_with($stepDetail, 'Missing:') || filled($log->error))) {
+                    $lookupDetail = $stepDetail;
+                } elseif ($lookupDetail === '') {
+                    $lookupDetail = IncomingFineLookup::presentMissing($lookupMissing, $log->error)['tooltip'];
+                }
             }
 
             $merged = array_merge($row, [
@@ -578,6 +712,7 @@ class IncomingFines extends Page implements HasForms
                 'ticket_time' => $log->ticket_time ?: ($row['ticket_time'] ?? ''),
                 'lookup_status' => $lookup,
                 'lookup_detail' => $lookupDetail,
+                'lookup_missing' => $lookupMissing,
                 'excel_exported' => $excelExported,
                 'excel_batch' => $log->wheels_export_batch,
                 'excel_sharepoint_url' => $log->wheels_export_sharepoint_url,
@@ -962,6 +1097,9 @@ class IncomingFines extends Page implements HasForms
             'in_vio' => true,
             'lookup_status' => $result['lookup_status'],
             'lookup_detail' => $result['lookup_detail'],
+            'lookup_missing' => is_array($result['lookup_missing'] ?? null)
+                ? array_values(array_map('strval', $result['lookup_missing']))
+                : [],
             'vehicle' => $result['vehicle'] !== ''
                 ? $result['vehicle']
                 : strtoupper(trim((string) ($wheelsys['vehicle'] ?? ''))),

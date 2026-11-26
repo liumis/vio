@@ -129,6 +129,11 @@
         }
         .vio-tip:hover .vio-tip-panel,
         .vio-tip:focus-within .vio-tip-panel { display: block; }
+        .vio-tip-chip { position: relative; display: inline-flex; z-index: 1; }
+        .vio-tip-chip .vio-tip-panel {
+            left: 0; right: auto; width: max-content; max-width: min(18rem, 70vw);
+            white-space: pre-line;
+        }
         .vio-footer-bar {
             z-index: 40 !important;
             background: rgba(255,255,255,.92) !important;
@@ -142,20 +147,12 @@
             overflow: hidden;
             border-radius: 16px;
             background:
-                radial-gradient(120% 140% at 100% 0%, rgba(46,204,113,.12), transparent 45%),
-                linear-gradient(135deg, #1a2d3d 0%, #223a4e 48%, #2a4a63 100%);
+                #223a4e;
             color: #e8eef3;
             box-shadow: 0 18px 40px rgba(34,58,78,.18);
             padding: 22px 24px 20px;
         }
-        .vio-hero::before {
-            content: '';
-            position: absolute;
-            inset: 0;
-            background:
-                linear-gradient(90deg, transparent 0%, rgba(255,255,255,.04) 50%, transparent 100%);
-            pointer-events: none;
-        }
+        .vio-hero::before { display: none; }
         .vio-hero-top {
             position: relative;
             display: flex;
@@ -281,7 +278,7 @@
             margin-top: 1.5rem;
             border-radius: 14px;
             border: 1px dashed #d5dee7;
-            background: linear-gradient(180deg, #fbfcfd, #f5f8fa);
+            background: #f8fafc;
             padding: 28px 20px;
             text-align: center;
             color: #64748b;
@@ -312,8 +309,8 @@
         </div>
 
         <p class="vio-hero-note">
-            Re-fetch marks rows already saved as <strong style="color:#fff">Already have</strong>.
-            Use <strong style="color:#fff">Details</strong> for rental fixes or ANR assist.
+            Fetch keeps only senders matching <strong style="color:#fff">Authorities</strong> (email pattern).
+            Re-fetch marks saved rows as <strong style="color:#fff">Already have</strong>.
             Continue in
             <a href="{{ \App\Filament\Pages\WheelsExcelExport::getUrl() }}">To Wheelsys</a>.
         </p>
@@ -342,12 +339,7 @@
         $filteredResults = $this->filteredResults;
         $authorityIds = array_values(array_filter((array) ($data['authority_ids'] ?? [])));
         $statusKeys = array_values(array_filter((array) ($data['statuses'] ?? [])));
-        $filterActive = $authorityIds !== [] || $statusKeys !== [] || filled($this->statusSort);
-        $statusSortIcon = match ($this->statusSort) {
-            'asc' => '↑',
-            'desc' => '↓',
-            default => '↕',
-        };
+        $filterActive = $authorityIds !== [] || $statusKeys !== [] || filled($this->listSortColumn) || filled($this->statusSort);
         $authorityOptionsJson = \Illuminate\Support\Js::from(
             collect($this->authorityFilterOptions)->map(fn ($label, $value) => ['value' => (string) $value, 'label' => (string) $label])->values()->all()
         );
@@ -357,9 +349,21 @@
     @endphp
 
     @if (count($results) > 0)
-        <div class="mt-5 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div
+            class="mt-5 rounded-xl p-4 shadow-md"
+            style="border: 2px solid #94a3b8; background: #f8fafc;"
+        >
+            <div class="mb-3 flex flex-wrap items-center gap-2">
+                <span
+                    class="inline-flex items-center rounded-md px-2 py-1 text-[11px] font-800 uppercase tracking-wide"
+                    style="background:#1e293b;color:#fff;font-weight:800;"
+                >Filters</span>
+                <span class="text-sm font-semibold text-slate-800">Narrow this fetched list</span>
+                <span class="text-xs text-slate-500">· does not re-scan inbox</span>
+            </div>
+            <div class="flex flex-wrap items-end gap-3">
             <div class="block min-w-[16rem] flex-1 text-sm">
-                <span class="text-xs font-semibold uppercase tracking-wide text-slate-500">Authority</span>
+                <span class="text-xs font-bold uppercase tracking-wide text-slate-700">Authority</span>
                 <div
                     class="vio-ms mt-1.5"
                     wire:key="auth-filter-{{ md5(json_encode($authorityIds)) }}"
@@ -406,7 +410,7 @@
             </div>
 
             <div class="block min-w-[16rem] flex-1 text-sm">
-                <span class="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</span>
+                <span class="text-xs font-bold uppercase tracking-wide text-slate-700">Status</span>
                 <div
                     class="vio-ms mt-1.5"
                     wire:key="status-filter-{{ md5(json_encode($statusKeys)) }}"
@@ -453,17 +457,17 @@
             </div>
 
             @if ($filterActive)
-                <x-filament::button size="sm" color="gray" wire:click="clearListFilters">
-                    Clear filters
+                <x-filament::button size="sm" color="warning" wire:click="clearListFilters">
+                    Clear filters / sort
                 </x-filament::button>
             @endif
-            <p class="ml-auto text-xs text-slate-500 pb-1">
-                Showing <strong class="text-slate-800">{{ count($filteredResults) }}</strong> of {{ count($results) }}
+            <p class="ml-auto text-sm text-slate-700 pb-1">
+                Showing <strong class="text-slate-900">{{ count($filteredResults) }}</strong> of {{ count($results) }}
                 @if ($filterActive)
-                    · filtered
+                    · <span style="color:#b45309;font-weight:700;">filtered / sorted</span>
                 @endif
-                <span class="mt-1.5 block text-xs text-slate-500">Filters this list only — does not re-scan inbox.</span>
             </p>
+            </div>
         </div>
 
         @if (count($filteredResults) > 0)
@@ -471,24 +475,43 @@
                 <table class="vio-fines-table w-full min-w-[920px] text-left">
                     <thead>
                         <tr>
-                            <th style="width: 2.5rem;"></th>
-                            <th>From</th>
-                            <th>Subject</th>
-                            <th>Authority</th>
-                            <th>Informavimas</th>
-                            <th>Plate / rental</th>
-                            <th>
-                                <button
-                                    type="button"
-                                    wire:click="toggleStatusSort"
-                                    class="inline-flex items-center gap-1 uppercase tracking-wide"
-                                    style="font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer;"
-                                    title="Sort by status"
-                                >
-                                    Status
-                                    <span aria-hidden="true" style="opacity: {{ $this->statusSort === '' ? '0.45' : '1' }};">{{ $statusSortIcon }}</span>
-                                </button>
+                            <th style="width: 2.5rem;">
+                                @php
+                                    $selectableIds = $this->selectableFilteredIds();
+                                    $selectedSet = array_fill_keys(array_map('strval', $selectedIds), true);
+                                    $allSelectableChecked = $selectableIds !== []
+                                        && collect($selectableIds)->every(static fn (string $id): bool => isset($selectedSet[$id]));
+                                @endphp
+                                <input
+                                    type="checkbox"
+                                    class="rounded border-slate-300"
+                                    title="Check all selectable"
+                                    wire:click.prevent="toggleSelectAll"
+                                    @checked($allSelectableChecked)
+                                    @disabled($selectableIds === [])
+                                />
                             </th>
+                            @foreach ([
+                                'from' => 'From',
+                                'subject' => 'Subject',
+                                'authority' => 'Authority',
+                                'informavimas' => 'Informavimas',
+                                'plate' => 'Plate / rental',
+                                'status' => 'Status',
+                            ] as $sortKey => $sortLabel)
+                                <th>
+                                    <button
+                                        type="button"
+                                        wire:click="toggleListSort(@js($sortKey))"
+                                        class="inline-flex items-center gap-1 uppercase tracking-wide"
+                                        style="font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; {{ $this->listSortActive($sortKey) ? 'color:#0f172a;font-weight:800;' : '' }}"
+                                        title="Sort by {{ $sortLabel }}"
+                                    >
+                                        {{ $sortLabel }}
+                                        <span aria-hidden="true" style="opacity: {{ $this->listSortActive($sortKey) ? '1' : '0.4' }};">{{ $this->listSortIcon($sortKey) }}</span>
+                                    </button>
+                                </th>
+                            @endforeach
                             <th></th>
                         </tr>
                     </thead>
@@ -517,6 +540,12 @@
                                 $fromEmail = trim((string) ($row['from_email'] ?? ''));
                                 $preview = trim((string) ($row['preview'] ?? ''));
                                 $subject = trim((string) ($row['subject'] ?? ''));
+                                $lookupGap = $lookup === 'not_found'
+                                    ? \App\Support\IncomingFineLookup::presentMissing(
+                                        is_array($row['lookup_missing'] ?? null) ? $row['lookup_missing'] : [],
+                                        $row['lookup_detail'] ?? null,
+                                    )
+                                    : null;
                             @endphp
                             <tr
                                 wire:key="fine-{{ $msgId !== '' ? $msgId : $index }}"
@@ -572,9 +601,21 @@
                                 </td>
                                 <td style="min-width: 8rem;">
                                     <div style="font-weight: 700; letter-spacing: .02em;">{{ ($row['vehicle'] ?? '') !== '' ? $row['vehicle'] : '—' }}</div>
-                                    @if (filled($row['driver_name'] ?? null) || filled($row['lookup_detail'] ?? null) || filled($row['reference'] ?? null))
-                                        <div style="margin-top: 2px; font-size: 11px; color: #64748b; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                                            {{ $row['driver_name'] ?? ($row['lookup_detail'] ?? ($row['reference'] ?? '')) }}
+                                    @php
+                                        $plateSub = filled($row['driver_name'] ?? null)
+                                            ? (string) $row['driver_name']
+                                            : (
+                                                is_array($lookupGap)
+                                                    ? (string) (($lookupGap['labels'][0] ?? '') ?: ($row['lookup_detail'] ?? ''))
+                                                    : (string) ($row['lookup_detail'] ?? ($row['reference'] ?? ''))
+                                            );
+                                    @endphp
+                                    @if (filled($plateSub))
+                                        <div
+                                            style="margin-top: 2px; font-size: 11px; color: {{ is_array($lookupGap) ? '#b45309' : '#64748b' }}; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                                            @if (is_array($lookupGap)) title="{{ $lookupGap['tooltip'] }}" @endif
+                                        >
+                                            {{ $plateSub }}
                                         </div>
                                     @endif
                                 </td>
@@ -592,6 +633,11 @@
                                             <span class="vio-chip vio-chip-ok">Already have · Found</span>
                                         @elseif ($lookup === 'needs_review')
                                             <span class="vio-chip vio-chip-critical" title="{{ $row['lookup_detail'] ?? 'Multiple drivers that day' }}">Needs review · multi driver</span>
+                                        @elseif ($lookup === 'not_found' && is_array($lookupGap))
+                                            <span class="vio-tip vio-tip-chip" tabindex="0">
+                                                <span class="vio-chip vio-chip-warn vio-tip-trigger" style="border-bottom: 0; cursor: help;">{{ $lookupGap['chip'] }}</span>
+                                                <span class="vio-tip-panel">{{ $lookupGap['tooltip'] }}</span>
+                                            </span>
                                         @elseif ($lookup === 'not_found')
                                             <span class="vio-chip vio-chip-warn">Not found · retry</span>
                                         @elseif (! empty($row['in_vio']))

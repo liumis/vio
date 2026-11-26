@@ -8,6 +8,7 @@ use App\Models\Import;
 use App\Models\User;
 use App\Notifications\CustomResetPasswordNotification;
 use App\Support\ActivityLogger;
+use App\Support\HttpTimeouts;
 use Filament\Notifications\Auth\ResetPassword as FilamentResetPassword;
 use Filament\Tables\Table;
 use Illuminate\Auth\Events\Failed;
@@ -26,6 +27,11 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        $phpTimeout = HttpTimeouts::php();
+        @ini_set('max_execution_time', (string) $phpTimeout);
+        @ini_set('default_socket_timeout', (string) HttpTimeouts::long());
+        @set_time_limit($phpTimeout);
+
         Table::configureUsing(function (Table $table): void {
             $table
                 ->paginationPageOptions([10, 25, 50, 100, 'all'])

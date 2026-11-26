@@ -133,7 +133,8 @@ final class IncomingFineReplyBuilder
             );
         }
 
-        $template = trim((string) ($authority->mail_template ?? ''));
+        $party = (string) ($wheelsys['party'] ?? 'driver');
+        $template = $this->resolveMailTemplate($authority, $party);
         if ($template === '') {
             throw new RuntimeException('Mail template is empty for authority: '.$authority->name);
         }
@@ -155,6 +156,9 @@ final class IncomingFineReplyBuilder
         }
 
         $driver = (string) ($wheelsys['driver'] ?? '');
+        if ($driver === '' && $party === 'corporate') {
+            $driver = (string) ($wheelsys['corporate'] ?? '');
+        }
         $vehicle = strtoupper((string) ($wheelsys['vehicle'] ?? $vehicleHint));
         $address = trim(implode(', ', array_filter([
             (string) ($wheelsys['driver_address'] ?? ''),
@@ -164,6 +168,13 @@ final class IncomingFineReplyBuilder
 
         $license = (string) ($wheelsys['driver_license'] ?? '');
         $birthDate = (string) ($wheelsys['birth_date'] ?? '');
+        $companyCode = trim((string) (
+            $wheelsys['corporate_tax_id']
+            ?? $wheelsys['driver_tax_id']
+            ?? $wheelsys['company_code']
+            ?? $wheelsys['corporate_code']
+            ?? ''
+        ));
 
         $vars = [
             '[%1%]' => $reference,
@@ -178,6 +189,7 @@ final class IncomingFineReplyBuilder
             '[%10%]' => (string) ($wheelsys['driver_telephone'] ?? ''),
             '[%11%]' => (string) ($wheelsys['licence_issue_date'] ?? ''),
             '[%12%]' => (string) ($wheelsys['driver_country'] ?? ''),
+            '[%13%]' => $this->boldMark($companyCode),
         ];
 
         $bodyText = $this->appendMailSignature(
@@ -216,21 +228,23 @@ final class IncomingFineReplyBuilder
 
         $branded = $this->renderNeutralHtml($subject, $bodyText);
 
-        $party = (string) ($wheelsys['party'] ?? 'driver');
         $missing = [];
         $missingChecks = [
-            '[%2%]' => 'driver',
+            '[%2%]' => $party === 'corporate' ? 'company' : 'driver',
             '[%4%]' => 'vehicle',
             '[%8%]' => 'email',
         ];
         if ($party !== 'corporate') {
             $missingChecks['[%7%]'] = 'birth_date';
+        } else {
+            $missingChecks['[%13%]'] = 'company_code';
         }
         foreach ($missingChecks as $token => $label) {
             $raw = match ($token) {
                 '[%2%]' => $driver,
                 '[%4%]' => $vehicle,
                 '[%7%]' => $birthDate,
+                '[%13%]' => $companyCode,
                 default => trim((string) ($vars[$token] ?? '')),
             };
             if (str_contains($template, $token) && trim($raw) === '') {
@@ -266,6 +280,21 @@ final class IncomingFineReplyBuilder
             'missing_fields' => $missing,
             'wheelsys' => $wheelsys,
         ];
+    }
+
+    /**
+     * Driver template by default; corporate template when party = corporate (fallback to driver).
+     */
+    public function resolveMailTemplate(Authority $authority, string $party): string
+    {
+        if ($party === 'corporate') {
+            $corporate = trim((string) ($authority->mail_template_corporate ?? ''));
+            if ($corporate !== '') {
+                return $corporate;
+            }
+        }
+
+        return trim((string) ($authority->mail_template ?? ''));
     }
 
     /**
@@ -480,10 +509,13 @@ final class IncomingFineReplyBuilder
             'Automobilį',
             'Vardas, pavardė',
             'vardas, pavardė',
+            'Įmonė',
+            'Įmonės kodas',
             'Gimimo data',
             'gim. data',
             'Telefono nr',
             'telefono nr',
+            'Telefono numeris',
             'Telefonas',
             'El. paštas',
             'El. Paštas',

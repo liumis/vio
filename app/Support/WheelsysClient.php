@@ -320,7 +320,7 @@ final class WheelsysClient
             return null;
         }
         if ($fromLabel !== '' && $toLabel !== '') {
-            return $fromLabel.' â†’ '.$toLabel;
+            return $fromLabel.' ? '.$toLabel;
         }
 
         return $fromLabel !== '' ? $fromLabel : $toLabel;
@@ -331,7 +331,7 @@ final class WheelsysClient
      *
      * Party rule (Imported fines / authority reply):
      * 1) physical person = Driver (never Corporate card while Driver exists)
-     * 2) if no Driver â†’ Corporate, and address comes from Corporate
+     * 2) if no Driver ? Corporate, and address comes from Corporate
      *
      * @param  array<string, mixed>  $rental
      * @return array<string, mixed>
@@ -394,7 +394,7 @@ final class WheelsysClient
 
         $driverId = $rentalOrDraft['driver_id'] ?? $raw['Driver_Id'] ?? null;
         $hasDriverId = filled($driverId) && (string) $driverId !== '0';
-        // Physical person comes from Driver_* fields â€” not from Corporate card.
+        // Physical person comes from Driver_* fields — not from Corporate card.
         $rawDriverName = trim((string) ($raw['Driver_Name'] ?? ''));
         if ($hasDriverId || $rawDriverName !== '') {
             return 'driver';
@@ -434,10 +434,10 @@ final class WheelsysClient
         $needsPhone = ! filled($draft['driver_telephone'] ?? null);
         $needsLicencePlace = ! filled($draft['licence_issue_place'] ?? null);
 
-        // Still try Occupation â†’ asmens kodas â†’ birth date from raw rental/driver payload
+        // Still try Occupation ? asmens kodas ? birth date from raw rental/driver payload
         // even when we already have address (common Wheelsys gap).
         if (! $needsBirth) {
-            // no-op â€” birth already present
+            // no-op — birth already present
         } elseif ($birth = $this->birthDateFromPersonalCodeSources($draft)) {
             $draft['birth_date'] = $birth;
             $needsBirth = false;
@@ -451,7 +451,7 @@ final class WheelsysClient
         $raw = is_array($draft['raw'] ?? null) ? $draft['raw'] : [];
         $driverId = $draft['driver_id'] ?? $raw['Driver_Id'] ?? null;
         $email = $draft['customer_email'] ?? $raw['DriverEmail'] ?? null;
-        // Physical person name from Driver_* â€” never Corporate_Name while party=driver.
+        // Physical person name from Driver_* — never Corporate_Name while party=driver.
         $name = trim((string) ($raw['Driver_Name'] ?? ''));
         if ($name === '') {
             $name = trim((string) ($draft['driver'] ?? ''));
@@ -534,7 +534,7 @@ final class WheelsysClient
     }
 
     /**
-     * Corporate Customers (corporateview) â€” used only when rental has no physical Driver.
+     * Corporate Customers (corporateview) — used only when rental has no physical Driver.
      *
      * @param  array<string, mixed>  $draft
      * @return array<string, mixed>
@@ -599,7 +599,7 @@ final class WheelsysClient
             }
         }
 
-        // Juridical party â€” birth / licence stay empty on purpose.
+        // Juridical party — birth / licence stay empty on purpose.
         $draft['birth_date'] = null;
         $draft['driver_license'] = null;
         $draft['party'] = 'corporate';
@@ -899,7 +899,7 @@ final class WheelsysClient
         $username = $creds['username'];
         $password = $creds['password'];
         if ($username === '' || $password === '') {
-            throw new RuntimeException('Wheelsys credentials are not configured. Set them in Settings â†’ System settings (Wheelsys) or WHEELSYS_* in .env.');
+            throw new RuntimeException('Wheelsys credentials are not configured. Set them in Settings ? System settings (Wheelsys) or WHEELSYS_* in .env.');
         }
 
         $loginUrl = $this->baseUrl().'/sign-in/default.aspx?ReturnUrl='
@@ -1250,7 +1250,7 @@ final class WheelsysClient
         }
 
         try {
-            // Contracts / offense times are minute-precision â€” ignore seconds.
+            // Contracts / offense times are minute-precision — ignore seconds.
             return \Illuminate\Support\Carbon::parse($raw)->startOfMinute();
         } catch (\Throwable) {
             return null;
@@ -1302,7 +1302,7 @@ final class WheelsysClient
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_COOKIEJAR => $this->cookieFile,
             CURLOPT_COOKIEFILE => $this->cookieFile,
-            CURLOPT_TIMEOUT => 180,
+            CURLOPT_TIMEOUT => HttpTimeouts::long(),
             CURLOPT_HTTPHEADER => array_merge(['User-Agent: Mozilla/5.0 (compatible; SitGo-VIO/1.0)'], $headers),
             CURLOPT_POST => $body !== null,
             CURLOPT_POSTFIELDS => $body,

@@ -118,18 +118,100 @@ class FineProcessLog extends Model
     }
 
     /**
-     * Primary fine PDF on SharePoint (not the Wheelsys Excel import workbook).
+     * Primary fine notice PDF on SharePoint (never an RNT / contract file).
      */
     public function documentSharePointUrl(): ?string
     {
+        $workflow = is_array($this->workflow) ? $this->workflow : [];
+        $stored = trim((string) (($workflow['sharepoint_document']['url'] ?? '') ?: ''));
+        if ($stored !== '' && ! $this->isRntSharePointUrl($stored)) {
+            return $stored;
+        }
+
+        $urls = is_array($this->sharepoint_urls) ? $this->sharepoint_urls : [];
+        $fallback = null;
+        foreach ($urls as $url) {
+            if (! is_string($url)) {
+                continue;
+            }
+            $url = trim($url);
+            if ($url === '') {
+                continue;
+            }
+            if ($this->isRntSharePointUrl($url)) {
+                continue;
+            }
+            // Prefer file whose name contains the fine reference.
+            $ref = trim((string) ($this->reference ?? ''));
+            $path = urldecode((string) (parse_url($url, PHP_URL_PATH) ?: ''));
+            if ($ref !== '' && $path !== '' && str_contains($path, $ref)) {
+                return $url;
+            }
+            $fallback ??= $url;
+        }
+
+        return $fallback;
+    }
+
+    /**
+     * Rental contract (RNT) files archived from Wheelsys → SharePoint.
+     *
+     * @return list<string>
+     */
+    public function rntContractSharePointUrls(): array
+    {
+        $workflow = is_array($this->workflow) ? $this->workflow : [];
+        $stored = is_array($workflow['sharepoint_rnt_documents']['urls'] ?? null)
+            ? $workflow['sharepoint_rnt_documents']['urls']
+            : [];
+        $out = [];
+        foreach ($stored as $url) {
+            if (is_string($url) && trim($url) !== '') {
+                $out[] = trim($url);
+            }
+        }
+        if ($out !== []) {
+            return array_values(array_unique($out));
+        }
+
         $urls = is_array($this->sharepoint_urls) ? $this->sharepoint_urls : [];
         foreach ($urls as $url) {
-            if (is_string($url) && trim($url) !== '') {
-                return trim($url);
+            if (is_string($url) && $this->isRntSharePointUrl($url)) {
+                $out[] = trim($url);
             }
         }
 
-        return null;
+        return array_values(array_unique($out));
+    }
+
+    public function primaryRntContractSharePointUrl(): ?string
+    {
+        $urls = $this->rntContractSharePointUrls();
+
+        // Prefer signed contract PDFs.
+        foreach ($urls as $url) {
+            $path = strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?: '')));
+            if (str_contains($path, 'signed-') && str_ends_with($path, '.pdf')) {
+                return $url;
+            }
+        }
+
+        foreach ($urls as $url) {
+            $path = strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?: '')));
+            if (str_ends_with($path, '.pdf')) {
+                return $url;
+            }
+        }
+
+        return $urls[0] ?? null;
+    }
+
+    private function isRntSharePointUrl(string $url): bool
+    {
+        $path = strtolower(basename(urldecode((string) (parse_url($url, PHP_URL_PATH) ?: ''))));
+
+        return str_starts_with($path, 'rnt-')
+            || str_contains($path, 'signed-d20');
     }
 
     public function importer(): BelongsTo

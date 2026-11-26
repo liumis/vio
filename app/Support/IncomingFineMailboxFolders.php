@@ -64,7 +64,7 @@ final class IncomingFineMailboxFolders
         }
 
         $response = Http::withToken($token)
-            ->timeout(30)
+            ->timeout(HttpTimeouts::default())
             ->post(
                 'https://graph.microsoft.com/v1.0/users/'.rawurlencode($mailbox).'/mailFolders',
                 ['displayName' => $displayName]
@@ -155,7 +155,7 @@ final class IncomingFineMailboxFolders
     private function moveMessage(string $messageId, string $destinationFolderId, string $mailbox): array
     {
         $response = Http::withToken($this->graph->accessToken())
-            ->timeout(40)
+            ->timeout(HttpTimeouts::default())
             ->post(
                 'https://graph.microsoft.com/v1.0/users/'.rawurlencode($mailbox)
                 .'/messages/'.rawurlencode($messageId).'/move',
@@ -180,7 +180,7 @@ final class IncomingFineMailboxFolders
         $guards = 0;
         while ($url !== '' && $guards < 20) {
             $guards++;
-            $response = Http::withToken($token)->timeout(30)->get($url);
+            $response = Http::withToken($token)->timeout(HttpTimeouts::default())->get($url);
             if (! $response->successful()) {
                 throw new RuntimeException('Failed to list mail folders: '.$response->body());
             }

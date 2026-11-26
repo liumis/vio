@@ -16,6 +16,7 @@ class Authority extends Model
         'to_email',
         'email_pattern',
         'mail_template',
+        'mail_template_corporate',
         'informavimo_terminas',
         'informavimo_terminas_tipas',
         'info_pdf_template',
