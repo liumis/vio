@@ -215,8 +215,11 @@
             <li>Rezultatas matomas <strong>Imported fines</strong></li>
         </ol>
         <p class="note" style="margin:6px 0 0;">
-            Pastaba: VIO kelia PDF į SharePoint. Automatinio įkėlimo į Wheelsys „Traffic violation“ ir „Rental (RNT)“ priedų laukus nėra —
-            tai lieka rankiniu Wheelsys žingsniu, jei reikia.
+            Pastaba: VIO kelia PDF į SharePoint struktūrą
+            <code>{base}/{YYYY}/{Reference}[__{RNT}]/{Driver} {Reference}.pdf</code>
+            (pvz. …/Policijos administravimas/2026/26316319149__RNT-76970/…).
+            Automatinio įkėlimo į Wheelsys „Traffic violation“ ir „Rental (RNT)“ priedų laukus nėra —
+            tai lieka rankiniu Wheelsys žingsniu, jei reikia; paieška — per SharePoint / VIO Document.
         </p>
     </div>
 

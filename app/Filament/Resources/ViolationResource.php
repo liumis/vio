@@ -11,11 +11,13 @@ use App\Support\IncomingFineReplyBuilder;
 use App\Support\IncomingFineReplySender;
 use App\Support\InformavimoTerminas;
 use App\Support\WheelsysLoginBridge;
+use App\Support\WheelsysRentalDocumentArchiver;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
+use Filament\Tables\Grouping\Group;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
@@ -30,15 +32,15 @@ class ViolationResource extends Resource
 
     protected static ?string $navigationIcon = 'heroicon-o-exclamation-triangle';
 
-    protected static ?string $navigationLabel = '3. Imported fines';
+    protected static ?string $navigationLabel = '3. Imported';
 
     protected static ?string $navigationGroup = 'Fines';
 
     protected static ?string $slug = 'violations';
 
-    protected static ?string $modelLabel = 'imported fine';
+    protected static ?string $modelLabel = 'imported';
 
-    protected static ?string $pluralModelLabel = 'imported fines';
+    protected static ?string $pluralModelLabel = 'Imported';
 
     protected static ?int $navigationSort = 3;
 
@@ -62,11 +64,79 @@ class ViolationResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
-            ->defaultSort('wheels_exported_at', 'desc')
+            ->defaultSort('wheels_imported_at', 'desc')
+            ->defaultGroup('wheels_imported_at')
+            ->groupingSettingsInDropdownOnDesktop()
+            ->groups([
+                Group::make('wheels_imported_at')
+                    ->label('Imported')
+                    ->date()
+                    ->collapsible()
+                    ->titlePrefixedWithLabel(false),
+                Group::make('wheels_export_batch')
+                    ->label('Import file')
+                    ->collapsible()
+                    ->titlePrefixedWithLabel(false)
+                    ->getTitleFromRecordUsing(function (FineProcessLog $record): string {
+                        $file = trim((string) ($record->wheels_export_file_name ?: ''));
+                        if ($file !== '') {
+                            return $file;
+                        }
+                        $batch = trim((string) ($record->wheels_export_batch ?: ''));
+
+                        return $batch !== '' ? $batch : 'No import file';
+                    })
+                    ->getDescriptionFromRecordUsing(function (FineProcessLog $record): ?string {
+                        if (! $record->wheels_imported_at) {
+                            return null;
+                        }
+
+                        return 'Imported '.$record->wheels_imported_at
+                            ->timezone(config('app.timezone'))
+                            ->format('Y-m-d H:i');
+                    }),
+            ])
             ->columns([
                 Tables\Columns\ViewColumn::make('reply_ready')
                     ->label('Reply')
                     ->view('filament.tables.columns.reply-readiness-bubble'),
+                Tables\Columns\ViewColumn::make('mail_preview')
+                    ->label('Preview / Send')
+                    ->view('filament.tables.columns.mail-preview-icon')
+                    ->alignStart(),
+                Tables\Columns\TextColumn::make('email_to_authority')
+                    ->label('Email to Authority')
+                    ->badge()
+                    ->state(function (FineProcessLog $record): string {
+                        if (FineReplyReadiness::forLog($record)['channel'] === 'epaslaugos') {
+                            return 'Not needed';
+                        }
+
+                        return filled($record->email_sent_at) ? 'Sent' : 'Not sent';
+                    })
+                    ->color(function (FineProcessLog $record): string {
+                        if (FineReplyReadiness::forLog($record)['channel'] === 'epaslaugos') {
+                            return 'gray';
+                        }
+
+                        return filled($record->email_sent_at) ? 'success' : 'danger';
+                    })
+                    ->weight(fn (FineProcessLog $record): string => filled($record->email_sent_at) ? 'medium' : 'bold')
+                    ->tooltip(function (FineProcessLog $record): ?string {
+                        if (FineReplyReadiness::forLog($record)['channel'] === 'epaslaugos') {
+                            return 'ANR / ePaslaugos — no authority email';
+                        }
+                        if (! filled($record->email_sent_at)) {
+                            return 'Authority not informed yet — send reply';
+                        }
+                        $when = $record->email_sent_at->timezone(config('app.timezone'))->format('Y-m-d H:i');
+                        $to = trim((string) ($record->email_to ?? ''));
+
+                        return $to !== '' ? "Sent {$when} → {$to}" : "Sent {$when}";
+                    })
+                    ->sortable(query: function (Builder $query, string $direction): Builder {
+                        return $query->orderBy('email_sent_at', $direction);
+                    }),
                 Tables\Columns\TextColumn::make('wheels_import_status')
                     ->label('Wheels')
                     ->badge()
@@ -82,11 +152,24 @@ class ViolationResource extends Resource
                         default => 'gray',
                     })
                     ->sortable(),
-                Tables\Columns\ViewColumn::make('mail_preview')
-                    ->label('')
-                    ->view('filament.tables.columns.mail-preview-icon')
-                    ->alignCenter()
-                    ->width('3rem'),
+                Tables\Columns\TextColumn::make('wheels_imported_at')
+                    ->label('Imported date')
+                    ->dateTime('Y-m-d H:i')
+                    ->sortable()
+                    ->weight('bold')
+                    ->color('success')
+                    ->placeholder('—')
+                    ->toggleable(),
+                Tables\Columns\TextColumn::make('wheels_export_file_name')
+                    ->label('Import file')
+                    ->searchable()
+                    ->sortable()
+                    ->wrap()
+                    ->placeholder('—')
+                    ->description(fn (FineProcessLog $record): ?string => filled($record->wheels_exported_at)
+                        ? 'Prepared '.$record->wheels_exported_at->timezone(config('app.timezone'))->format('Y-m-d H:i')
+                        : null)
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('vehicle')
                     ->label('Vehicle')
                     ->searchable()
@@ -101,6 +184,20 @@ class ViolationResource extends Resource
                     ->label('Reference')
                     ->searchable()
                     ->placeholder('—'),
+                Tables\Columns\TextColumn::make('agr_no')
+                    ->label('Contract')
+                    ->searchable()
+                    ->placeholder(fn (FineProcessLog $record): string => ($record->authority?->requiresContract() ? 'RNT missing' : '—'))
+                    ->color(fn (FineProcessLog $record): ?string => filled($record->agr_no)
+                        ? 'success'
+                        : ($record->authority?->requiresContract() ? 'danger' : null))
+                    ->weight(fn (FineProcessLog $record): string => ($record->authority?->requiresContract() && ! filled($record->agr_no))
+                        ? 'bold'
+                        : 'medium')
+                    ->tooltip(fn (FineProcessLog $record): ?string => ($record->authority?->requiresContract() && ! filled($record->agr_no))
+                        ? 'Julianus requires rental contract (RNT)'
+                        : null)
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('ticket_date')
                     ->label('Ticket date')
                     ->date('Y-m-d')
@@ -191,10 +288,11 @@ class ViolationResource extends Resource
                         return $query->where('wheels_import_status', $value);
                     }),
                 Tables\Filters\SelectFilter::make('reply_mail')
-                    ->label('Authority reply')
+                    ->label('Email to Authority')
                     ->options([
-                        'sent' => 'Already sent',
-                        'not_sent' => 'Not sent yet',
+                        'sent' => 'Sent',
+                        'not_sent' => 'Not sent',
+                        'not_needed' => 'Not needed',
                     ])
                     ->query(function (Builder $query, array $data): Builder {
                         $value = $data['value'] ?? null;
@@ -202,7 +300,15 @@ class ViolationResource extends Resource
                             return $query->whereNotNull('email_sent_at');
                         }
                         if ($value === 'not_sent') {
-                            return $query->whereNull('email_sent_at');
+                            return $query->whereNull('email_sent_at')
+                                ->whereDoesntHave('authority', function (Builder $q): void {
+                                    $q->where('email_pattern', 'like', '%anr.gov%');
+                                });
+                        }
+                        if ($value === 'not_needed') {
+                            return $query->whereHas('authority', function (Builder $q): void {
+                                $q->where('email_pattern', 'like', '%anr.gov%');
+                            });
                         }
 
                         return $query;
@@ -224,6 +330,33 @@ class ViolationResource extends Resource
                     ->openUrlInNewTab()
                     ->visible(fn (FineProcessLog $record): bool => filled($record->documentSharePointUrl()))
                     ->tooltip('Document · Fine PDF on SharePoint'),
+                Tables\Actions\Action::make('fetchRntDocs')
+                    ->label('RNT docs')
+                    ->icon('heroicon-o-arrow-down-tray')
+                    ->iconButton()
+                    ->color('gray')
+                    ->tooltip('Fetch RNT attachments from Wheelsys → SharePoint')
+                    ->visible(fn (FineProcessLog $record): bool => filled($record->rental_id))
+                    ->requiresConfirmation()
+                    ->modalHeading('Fetch RNT documents')
+                    ->modalDescription('Downloads Attached documents from Wheelsys rental and saves them into the fine SharePoint folder (…/{Reference}__{RNT}/).')
+                    ->action(function (FineProcessLog $record): void {
+                        try {
+                            $result = app(WheelsysRentalDocumentArchiver::class)->archiveForLog($record, force: true);
+                            Notification::make()
+                                ->success()
+                                ->title('RNT docs saved')
+                                ->body($result['count'].' file(s) → '.$result['folder'])
+                                ->send();
+                        } catch (Throwable $e) {
+                            Notification::make()
+                                ->danger()
+                                ->title('RNT fetch failed')
+                                ->body($e->getMessage())
+                                ->persistent()
+                                ->send();
+                        }
+                    }),
                 Tables\Actions\Action::make('chargeFailed')
                     ->label('Nepavyko nuskaičiuoti')
                     ->icon('heroicon-o-banknotes')
@@ -451,8 +584,8 @@ class ViolationResource extends Resource
                         }),
                 ]),
             ])
-            ->emptyStateHeading('No Wheelsys import fines yet')
-            ->emptyStateDescription('Prepare a file in Wheelsys import, import in Wheelsys, then Update Wheelsys status.');
+            ->emptyStateHeading('No imported fines yet')
+            ->emptyStateDescription('Prepare a file in To Wheelsys, import in Wheelsys, then Update Wheelsys status.');
     }
 
     public static function getPages(): array

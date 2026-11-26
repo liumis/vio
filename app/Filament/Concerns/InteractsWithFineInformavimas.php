@@ -3,6 +3,7 @@
 namespace App\Filament\Concerns;
 
 use App\Models\FineProcessLog;
+use App\Support\EpaslaugosAssist;
 use App\Support\FineReplyReadiness;
 use App\Support\IncomingFineReplyBuilder;
 use App\Support\IncomingFineReplySender;
@@ -53,6 +54,36 @@ trait InteractsWithFineInformavimas
     /** @var array{ready:bool,sent:bool,channel:string,missing:list<string>,label:string,detail:string,missing_labels:list<string>,severity:string}|null */
     public ?array $informuotiReadiness = null;
 
+    public string $epaslaugosPersonType = EpaslaugosAssist::PERSON_LT_NATURAL;
+
+    /**
+     * Assisted ANR/ePaslaugos helpers (no portal API — open + copy).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function getEpaslaugosAssistProperty(): ?array
+    {
+        if (! is_array($this->previewDraft) || ($this->previewDraft['reply_channel'] ?? '') !== 'epaslaugos') {
+            return null;
+        }
+
+        return app(EpaslaugosAssist::class)->build(
+            $this->previewDraft,
+            is_array($this->wheelsysSelected) ? $this->wheelsysSelected : null,
+            $this->epaslaugosPersonType,
+        );
+    }
+
+    public function updatedEpaslaugosPersonType(): void
+    {
+        // Recompute assist fields on next render.
+    }
+
+    public function notifyClipboardCopied(string $label = 'Copied'): void
+    {
+        Notification::make()->success()->title($label)->send();
+    }
+
     public function openInformuoti(int $logId): void
     {
         $log = FineProcessLog::query()->with('authority')->find($logId);
@@ -88,10 +119,14 @@ trait InteractsWithFineInformavimas
         $this->previewMessage = [
             'id' => $log->graph_message_id,
             'from_email' => $log->from_email,
+            'from_name' => $log->authority_name,
             'authority_id' => $log->authority_id,
             'authority_name' => $log->authority_name,
             'subject' => $log->subject,
             'received_at' => optional($log->received_at)?->toIso8601String(),
+            'received_at_local' => optional($log->received_at)
+                ?->timezone(config('app.timezone'))
+                ?->format('Y-m-d H:i'),
         ];
         $this->wheelsysSelected = $wheelsys !== [] ? $wheelsys : null;
         $this->wheelsysResults = $this->wheelsysSelected ? [$this->wheelsysSelected] : [];
@@ -305,6 +340,17 @@ trait InteractsWithFineInformavimas
         try {
             $draft = app(IncomingFineReplyBuilder::class)->refreshHtml($this->previewDraft);
             $this->previewDraft = $draft;
+
+            $missing = is_array($draft['missing_fields'] ?? null) ? $draft['missing_fields'] : [];
+            if (in_array('contract', $missing, true) || (! empty($draft['requires_contract']) && ! filled($draft['agr_no'] ?? null))) {
+                Notification::make()
+                    ->danger()
+                    ->title('Contract (RNT) required')
+                    ->body('Julianus: pick a Wheelsys rental so the contract number is set before sending.')
+                    ->send();
+
+                return;
+            }
 
             $log = $this->informuotiLogId
                 ? FineProcessLog::query()->find($this->informuotiLogId)

@@ -47,6 +47,14 @@ final class IncomingFineReplySender
             $attachments[] = $notice;
         }
 
+        $rntAttached = [];
+        if ($log !== null && $this->draftRequiresContract($draft, $log)) {
+            foreach ($this->rentalContractAttachments($log) as $rnt) {
+                $attachments[] = $rnt;
+                $rntAttached[] = $rnt['name'];
+            }
+        }
+
         app(MicrosoftGraphMailer::class)->sendHtml(
             fromEmail: $from,
             toEmail: $to,
@@ -73,6 +81,14 @@ final class IncomingFineReplySender
                 'document_number' => $infoPdf['document_number'],
                 'template' => $infoPdf['template'] ?? null,
                 'sharepoint_url' => $infoPdf['sharepoint_url'] ?? null,
+            ];
+        }
+        if ($rntAttached !== []) {
+            $workflow['rnt_attached_on_send'] = [
+                'files' => $rntAttached,
+                'agr_no' => $log->agr_no,
+                'rental_id' => $log->rental_id,
+                'at' => now()->toIso8601String(),
             ];
         }
 
@@ -131,6 +147,87 @@ final class IncomingFineReplySender
                 'name' => basename($relative),
                 'content_type' => 'application/pdf',
             ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function draftRequiresContract(array $draft, FineProcessLog $log): bool
+    {
+        if (! empty($draft['requires_contract'])) {
+            return true;
+        }
+
+        $authority = $log->relationLoaded('authority')
+            ? $log->authority
+            : ($log->authority_id ? \App\Models\Authority::query()->find($log->authority_id) : null);
+
+        return $authority?->requiresContract() === true;
+    }
+
+    /**
+     * Julianus: attach rental contract PDFs from Wheelsys (and archive to SharePoint).
+     *
+     * @return list<array{path:string,name:string,content_type:string}>
+     */
+    private function rentalContractAttachments(FineProcessLog $log): array
+    {
+        if (! filled($log->rental_id)) {
+            throw new RuntimeException(
+                'Julianus requires the rental contract (RNT). Pick a Wheelsys rental before sending.'
+            );
+        }
+
+        // One Wheelsys download — attach to mail; SharePoint archive is best-effort (same bytes).
+        $files = app(WheelsysClient::class)->downloadRentalAttachmentFiles((int) $log->rental_id);
+        if ($files === []) {
+            throw new RuntimeException(
+                'Julianus requires the rental contract (RNT), but Wheelsys rental has no attached documents.'
+            );
+        }
+
+        try {
+            app(WheelsysRentalDocumentArchiver::class)->archiveDownloadedFiles($log, $files);
+        } catch (\Throwable) {
+            // Mail attach still proceeds.
+        }
+
+        $disk = Storage::disk('local');
+        $dir = 'private/rnt-send/'.$log->id.'-'.uniqid('', true);
+        $disk->makeDirectory($dir);
+
+        $out = [];
+        $agrNo = trim((string) ($log->agr_no ?? ''));
+        foreach ($files as $file) {
+            $rawName = basename(str_replace('\\', '/', (string) ($file['name'] ?? 'rnt.pdf')));
+            $rawName = preg_replace('/[\/\\\\:*?"<>|]+/', '-', $rawName) ?: 'rnt.pdf';
+            if ($agrNo !== '' && ! str_contains($rawName, $agrNo)) {
+                $ext = pathinfo($rawName, PATHINFO_EXTENSION);
+                $stem = pathinfo($rawName, PATHINFO_FILENAME);
+                $rawName = $stem.'-'.$agrNo.($ext !== '' ? '.'.$ext : '');
+            }
+            if (! str_starts_with(strtolower($rawName), 'rnt-')) {
+                $rawName = 'rnt-'.$rawName;
+            }
+
+            $relative = $dir.'/'.$rawName;
+            $disk->put($relative, (string) ($file['contents'] ?? ''));
+            if (! $disk->exists($relative) || $disk->size($relative) < 1) {
+                continue;
+            }
+
+            $out[] = [
+                'path' => $relative,
+                'name' => $rawName,
+                'content_type' => 'application/pdf',
+            ];
+        }
+
+        if ($out === []) {
+            throw new RuntimeException('Could not prepare rental contract attachments for Julianus reply.');
         }
 
         return $out;

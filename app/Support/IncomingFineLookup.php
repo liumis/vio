@@ -40,7 +40,7 @@ final class IncomingFineLookup
         $subject = (string) ($message['subject'] ?? '');
         $preview = (string) ($message['preview'] ?? '');
         if (IncomingFineMailScanner::isNonFineNotice($subject, $preview)) {
-            return $this->skipNonFine($message, $userId, 'Skipped — not a fine notice (annulment / payment / move-car)');
+            return $this->skipNonFine($message, $userId, 'Skipped — not a fine notice (annulment / payment reminder / move-car)');
         }
 
         $extract = ['text' => '', 'files' => [], 'saved_dir' => null];
@@ -79,7 +79,7 @@ final class IncomingFineLookup
 
         // Body may carry annulment text when subject/preview alone do not.
         if (IncomingFineMailScanner::isNonFineNotice($subject, $preview."\n".$bodyText)) {
-            return $this->skipNonFine($message, $userId, 'Skipped — not a fine notice (annulment / payment / move-car)');
+            return $this->skipNonFine($message, $userId, 'Skipped — not a fine notice (annulment / payment reminder / move-car)');
         }
 
         $haystack = $haystackBuilder->build($message, $extract, $bodyText);

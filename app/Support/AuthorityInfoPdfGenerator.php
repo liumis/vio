@@ -83,7 +83,18 @@ final class AuthorityInfoPdfGenerator
 
         $sharePointUrl = null;
         try {
-            $upload = app(MicrosoftGraphSharePoint::class)->upload($fileName, $binary);
+            $archiver = app(IncomingFineDocumentArchiver::class);
+            $folder = $log !== null
+                ? $archiver->documentFolderPathForLog($log)
+                : $archiver->documentFolderPath(
+                    reference: $reference,
+                    date: $log?->ticket_date ?? now(),
+                    agrNo: $payload['rental'] !== '' ? $payload['rental'] : null,
+                    vehicle: $payload['vehicle'] !== '' ? $payload['vehicle'] : null,
+                );
+            $sharePoint = app(MicrosoftGraphSharePoint::class);
+            $sharePoint->ensureFolderExists($folder);
+            $upload = $sharePoint->upload($fileName, $binary, $folder);
             $sharePointUrl = trim((string) ($upload['webUrl'] ?? '')) ?: null;
         } catch (\Throwable) {
             // Local PDF + email attachment still succeed if SharePoint is unavailable.

@@ -40,6 +40,12 @@ class CourtDecisions extends Page implements HasForms
 
     protected static string $view = 'filament.pages.court-decisions';
 
+    /** MVP: hide from nav — court nutarimai are a later / rare track. */
+    public static function shouldRegisterNavigation(): bool
+    {
+        return false;
+    }
+
     public const LAWYER_EMAIL = 'kestutis.puidokas@gmail.com';
 
     public ?array $data = [];
@@ -244,8 +250,26 @@ class CourtDecisions extends Page implements HasForms
 
         $archiver = app(IncomingFineDocumentArchiver::class);
         $sharePoint = app(MicrosoftGraphSharePoint::class);
+        $folder = $archiver->documentFolderPath(
+            reference: $reference,
+            date: $ticketDate ?: $receivedDate,
+            vehicle: $vehicle,
+        );
         $urls = [];
         $uploadErrors = [];
+
+        try {
+            $sharePoint->ensureFolderExists($folder);
+        } catch (Throwable $e) {
+            Notification::make()
+                ->danger()
+                ->title('SharePoint folder failed')
+                ->body($e->getMessage())
+                ->persistent()
+                ->send();
+
+            return;
+        }
 
         foreach (array_values($paths) as $i => $relativePath) {
             try {
@@ -253,7 +277,7 @@ class CourtDecisions extends Page implements HasForms
                 $ext = pathinfo($relativePath, PATHINFO_EXTENSION) ?: 'pdf';
                 $nameRef = count($paths) > 1 ? $reference.' ('.($i + 1).')' : $reference;
                 $fileName = $archiver->documentFileName($driver, $nameRef, $ext);
-                $upload = $sharePoint->upload($fileName, $contents);
+                $upload = $sharePoint->upload($fileName, $contents, $folder);
                 if (($upload['webUrl'] ?? '') !== '') {
                     $urls[] = $upload['webUrl'];
                 }
@@ -301,6 +325,11 @@ class CourtDecisions extends Page implements HasForms
             'wheels_export_status' => FineProcessLog::WHEELS_EXPORT_PENDING,
             'workflow' => [
                 'source' => 'court_manual',
+                'sharepoint_document' => [
+                    'folder' => $folder,
+                    'url' => $urls[0] ?? null,
+                    'archived_at' => now()->toIso8601String(),
+                ],
                 'court' => [
                     'lawyer_email' => $lawyerEmail,
                     'lawyer_status' => $lawyerStatus,
@@ -311,7 +340,7 @@ class CourtDecisions extends Page implements HasForms
                 ],
                 'steps' => [
                     ['key' => 'court_entry', 'ok' => true, 'detail' => 'Manual court form'],
-                    ['key' => 'sharepoint', 'ok' => true, 'detail' => count($urls).' file(s) on SharePoint'],
+                    ['key' => 'sharepoint', 'ok' => true, 'detail' => count($urls).' file(s) → '.$folder],
                     [
                         'key' => 'lawyer',
                         'ok' => $lawyerOk,

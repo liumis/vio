@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Support\ActivityLogger;
 use App\Support\WheelsysLoginBridge;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -17,7 +18,19 @@ class WheelsysSsoController extends Controller
             $payload = WheelsysLoginBridge::buildFormPayload(
                 is_string($returnUrl) ? $returnUrl : null
             );
+            ActivityLogger::log('Wheelsys: SSO open', meta: [
+                'system' => 'wheelsys',
+                'ok' => true,
+                'return' => is_string($returnUrl) ? $returnUrl : null,
+            ]);
         } catch (Throwable $e) {
+            ActivityLogger::log('Wheelsys failed: SSO open', meta: [
+                'system' => 'wheelsys',
+                'ok' => false,
+                'return' => is_string($returnUrl) ? $returnUrl : null,
+                'error' => $e->getMessage(),
+            ]);
+
             return response(
                 view('wheelsys.sso-error', ['message' => $e->getMessage()]),
                 500
@@ -35,6 +48,12 @@ class WheelsysSsoController extends Controller
         $draft = $request->session()->get('wheelsys_create_draft');
 
         if (! is_array($draft) || $draft === []) {
+            ActivityLogger::log('Wheelsys failed: create TV assist', meta: [
+                'system' => 'wheelsys',
+                'ok' => false,
+                'error' => 'missing_draft',
+            ]);
+
             return response(
                 view('wheelsys.sso-error', [
                     'message' => 'No prepared traffic-violation data found. Go back to Manual Wheelsys search and click Create in Wheels again.',
@@ -42,6 +61,14 @@ class WheelsysSsoController extends Controller
                 400
             );
         }
+
+        ActivityLogger::log('Wheelsys: create TV assist', meta: [
+            'system' => 'wheelsys',
+            'ok' => true,
+            'vehicle' => $draft['vehicle'] ?? null,
+            'ticket_date' => $draft['ticket_date'] ?? null,
+            'ticket_number' => $draft['ticket_number'] ?? null,
+        ]);
 
         $openUrl = route('wheelsys.sso', [
             'return' => WheelsysLoginBridge::NEW_TRAFFIC_VIOLATION_PATH,

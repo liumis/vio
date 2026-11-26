@@ -180,7 +180,16 @@ final class IncomingFineReplyBuilder
             '[%12%]' => (string) ($wheelsys['driver_country'] ?? ''),
         ];
 
-        $bodyText = strtr($template, $vars);
+        $bodyText = $this->appendMailSignature(
+            $this->formatReplyBodyForReadability(strtr($template, $vars))
+        );
+
+        $agrNo = trim((string) ($wheelsys['agr_no'] ?? ''));
+        $requiresContract = $authority->requiresContract();
+        if ($requiresContract) {
+            $bodyText = $this->ensureContractLineInBody($bodyText, $agrNo);
+        }
+
         $config = EmailSetting::graphConfig();
 
         $to = $this->resolveReplyToEmail(
@@ -207,13 +216,17 @@ final class IncomingFineReplyBuilder
 
         $branded = $this->renderNeutralHtml($subject, $bodyText);
 
+        $party = (string) ($wheelsys['party'] ?? 'driver');
         $missing = [];
-        foreach ([
+        $missingChecks = [
             '[%2%]' => 'driver',
             '[%4%]' => 'vehicle',
-            '[%7%]' => 'birth_date',
             '[%8%]' => 'email',
-        ] as $token => $label) {
+        ];
+        if ($party !== 'corporate') {
+            $missingChecks['[%7%]'] = 'birth_date';
+        }
+        foreach ($missingChecks as $token => $label) {
             $raw = match ($token) {
                 '[%2%]' => $driver,
                 '[%4%]' => $vehicle,
@@ -223,6 +236,9 @@ final class IncomingFineReplyBuilder
             if (str_contains($template, $token) && trim($raw) === '') {
                 $missing[] = $label;
             }
+        }
+        if ($requiresContract && $agrNo === '') {
+            $missing[] = 'contract';
         }
 
         return [
@@ -241,6 +257,8 @@ final class IncomingFineReplyBuilder
             'ticket_time_hint' => $this->extractTicketTime($emailSubject, $textHaystack),
             'attachment_text_used' => $attachmentText !== '',
             'reply_channel' => $replyChannel,
+            'requires_contract' => $requiresContract,
+            'agr_no' => $agrNo !== '' ? $agrNo : null,
             'info_pdf_template' => $infoPdfTemplate,
             'info_pdf_file_name' => $infoPdfTemplate !== null && $reference !== ''
                 ? preg_replace('/[\/\\\\:*?"<>|]+/', '-', $reference).'.pdf'
@@ -248,6 +266,35 @@ final class IncomingFineReplyBuilder
             'missing_fields' => $missing,
             'wheelsys' => $wheelsys,
         ];
+    }
+
+    /**
+     * Ensure Julianus-style replies mention the rental contract (RNT).
+     */
+    private function ensureContractLineInBody(string $bodyText, string $agrNo): string
+    {
+        $label = 'Nuomos sutartis (RNT):';
+        $line = $label.' '.($agrNo !== '' ? $agrNo : '—');
+
+        if (preg_match('/nuomos\s+sutartis\s*\(RNT\)\s*:/iu', $bodyText) === 1) {
+            return preg_replace(
+                '/nuomos\s+sutartis\s*\(RNT\)\s*:\s*[^\r\n]*/iu',
+                $line,
+                $bodyText,
+                1
+            ) ?? $bodyText;
+        }
+
+        if (preg_match('/^\s*Pagarbiai\b/miu', $bodyText) === 1) {
+            return preg_replace(
+                '/^\s*Pagarbiai\b/miu',
+                $line."\n\nPagarbiai",
+                $bodyText,
+                1
+            ) ?? ($bodyText."\n\n".$line);
+        }
+
+        return rtrim($bodyText)."\n\n".$line;
     }
 
     /**
@@ -362,7 +409,10 @@ final class IncomingFineReplyBuilder
     public function refreshHtml(array $draft): array
     {
         $subject = trim((string) ($draft['subject'] ?? ''));
-        $bodyText = (string) ($draft['body_text'] ?? '');
+        $bodyText = $this->appendMailSignature(
+            $this->formatReplyBodyForReadability((string) ($draft['body_text'] ?? ''))
+        );
+        $draft['body_text'] = $bodyText;
         $draft['body_html'] = $this->renderNeutralHtml($subject, $bodyText);
 
         return $draft;
@@ -372,8 +422,97 @@ final class IncomingFineReplyBuilder
     {
         return View::make('emails.authority-reply-neutral', [
             'subject' => $subject,
-            'contentText' => $contentText,
+            'contentText' => $this->appendMailSignature(
+                $this->formatReplyBodyForReadability($contentText)
+            ),
         ])->render();
+    }
+
+    /**
+     * Append System settings → Default email signature (once).
+     */
+    public function appendMailSignature(string $body): string
+    {
+        try {
+            $signature = EmailSetting::mailSignature();
+        } catch (\Throwable) {
+            return rtrim($body);
+        }
+        if ($signature === '') {
+            return rtrim($body);
+        }
+
+        $body = rtrim(str_replace(["\r\n", "\r"], "\n", $body));
+        $signature = trim(str_replace(["\r\n", "\r"], "\n", $signature));
+        if ($signature === '') {
+            return $body;
+        }
+
+        // Avoid duplicating when refreshHtml / re-render runs again.
+        if ($body !== '' && str_ends_with($body, $signature)) {
+            return $body;
+        }
+
+        return $body === '' ? $signature : $body."\n\n".$signature;
+    }
+
+    /**
+     * Ensure authority replies are readable: keep existing newlines, otherwise
+     * break smashed one-liners before common LT field labels.
+     */
+    public function formatReplyBodyForReadability(string $body): string
+    {
+        $body = str_replace(["\r\n", "\r"], "\n", $body);
+        $body = trim($body);
+        if ($body === '') {
+            return '';
+        }
+
+        // Already structured — just normalize excessive blank lines.
+        if (substr_count($body, "\n") >= 2) {
+            $body = preg_replace("/\n{3,}/", "\n\n", $body) ?? $body;
+
+            return trim($body);
+        }
+
+        // Soft-break before typical reply labels when the template is one long line.
+        $labels = [
+            'Automobilį',
+            'Vardas, pavardė',
+            'vardas, pavardė',
+            'Gimimo data',
+            'gim. data',
+            'Telefono nr',
+            'telefono nr',
+            'Telefonas',
+            'El. paštas',
+            'El. Paštas',
+            'el.paštas',
+            'el. paštas',
+            'Vair. pažymėjimo numeris',
+            'vair. pažymėjimo numeris',
+            'Vair. pažymėjimo išdavimo data',
+            'vair. pažymėjimo išdavimo data',
+            'Vair. pažymėjimą išdavusi valstybė',
+            'vair.pažymėjimą išdavusi valstybė',
+            'Adresas',
+            'Pagal gautą',
+            'Pagarbiai',
+        ];
+
+        foreach ($labels as $label) {
+            $body = preg_replace(
+                '/\s+('.preg_quote($label, '/').')/u',
+                "\n$1",
+                $body
+            ) ?? $body;
+        }
+
+        // Greeting on its own line.
+        $body = preg_replace('/^(Sveiki)[,!]?\s+/u', "$1,\n\n", $body) ?? $body;
+        $body = preg_replace("/\n{3,}/", "\n\n", $body) ?? $body;
+
+        return trim($body);
     }
 
     /**

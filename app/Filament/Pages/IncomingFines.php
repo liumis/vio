@@ -35,11 +35,11 @@ class IncomingFines extends Page implements HasForms
 
     protected static ?string $navigationIcon = 'heroicon-o-inbox';
 
-    protected static ?string $navigationLabel = '1. New fines';
+    protected static ?string $navigationLabel = '1. Read emails';
 
     protected static ?string $navigationGroup = 'Fines';
 
-    protected static ?string $title = 'New fines';
+    protected static ?string $title = 'Read emails';
 
     protected static ?int $navigationSort = 1;
 

@@ -9,9 +9,36 @@ class AuthoritySeeder extends Seeder
 {
     public function run(): void
     {
-        $driverReplyTemplate = 'Sveiki, automobilį [%4%] pažeidimo metu vairavo: vardas, pavardė: [%2%] gim. data : [%7%] telefono nr.: [%10%] el.paštas : [%8%] vair. pažymėjimo numeris: [%5%] vair. pažymėjimo išdavimo data : [%11%] vair.pažymėjimą išdavusi valstybė : [%12%] Adresas: [%9%]';
+        $driverReplyTemplate = <<<'TXT'
+Sveiki,
 
-        $vilniusTemplate = 'Sveiki, Pagal gautą Vilniaus miesto savivaldybės administracijos viešosios tvarkos grupės pranešimą Nr. [%1%], pateikiama informacija apie asmenį, [%2%], [%3%], padariusį pažeidimą transporto priemone valstybinis numeris [%4%] Vardas, pavardė: [%6%] Gimimo data arba asmens kodas: [%7%] El. Paštas: [%8%] Adresas: [%9%] Telefonas: [%10%]';
+Automobilį [%4%] pažeidimo metu vairavo:
+
+Vardas, pavardė: [%2%]
+Gimimo data: [%7%]
+Telefono nr.: [%10%]
+El. paštas: [%8%]
+Vair. pažymėjimo numeris: [%5%]
+Vair. pažymėjimo išdavimo data: [%11%]
+Vair. pažymėjimą išdavusi valstybė: [%12%]
+Adresas: [%9%]
+
+Pagarbiai
+TXT;
+
+        $vilniusTemplate = <<<'TXT'
+Sveiki,
+
+Pagal gautą Vilniaus miesto savivaldybės administracijos viešosios tvarkos grupės pranešimą Nr. [%1%], pateikiama informacija apie asmenį [%2%], [%3%], padariusį pažeidimą transporto priemone valstybinis numeris [%4%].
+
+Vardas, pavardė: [%6%]
+Gimimo data arba asmens kodas: [%7%]
+El. paštas: [%8%]
+Adresas: [%9%]
+Telefonas: [%10%]
+
+Pagarbiai
+TXT;
 
         // Instrukcija: Vilniaus ANAM — „Informacija turi būti pateikta per 5 darbo dienas
         // nuo laiško gavimo“. ROIK / kitos institucijos — ta pati seka, atskiro termino nėra.
@@ -59,6 +86,7 @@ class AuthoritySeeder extends Seeder
                 'email_pattern' => '@julianus.lt',
                 'mail_template' => $driverReplyTemplate,
                 'info_pdf_template' => null,
+                'requires_contract' => true,
                 ...$defaultTerminas,
             ],
             [

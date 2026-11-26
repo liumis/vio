@@ -223,7 +223,7 @@
         <div class="screen-bar">VIO · Fines → Wheelsys import</div>
         <div class="screen-body">
             <div style="background:#1a2d3d; color:#e8eef3; padding:6px 8px; border-radius:4px; margin-bottom:6px; font-size:7.5pt;">
-                Select ready fines → <strong>Generate import file</strong> → <strong>Start import</strong> in Wheels → <strong>Update Wheelsys status</strong>
+                Select ready fines → <strong>Start import</strong> (Excel + Wheels) → <strong>Update Wheelsys status</strong>
             </div>
             <table class="tbl">
                 <tr><th>☐</th><th>Vehicle</th><th>Driver</th><th>Reference</th><th>Status</th></tr>
@@ -231,16 +231,14 @@
                 <tr><td>☑</td><td>XYZ987</td><td>Petras …</td><td>ROIK-…</td><td><span class="chip ok">Ready</span></td></tr>
             </table>
             <div class="toolbar" style="margin-top:6px; text-align:right;">
-                <span class="btn hit primary"><span class="pin">12</span>Generate import file</span>
-                <span class="btn hit primary"><span class="pin">13</span>Start import</span>
-                <span class="btn hit warn"><span class="pin">14</span>Update Wheelsys status</span>
+                <span class="btn hit primary"><span class="pin">12</span>Start import</span>
+                <span class="btn hit warn"><span class="pin">13</span>Update Wheelsys status</span>
             </div>
         </div>
     </div>
     <table class="legend">
-        <tr><td><span class="pin">12</span></td><td>Sugeneruoja Traffic violation Excel + SharePoint; statusas → <em>In import file</em></td></tr>
-        <tr><td><span class="pin">13</span></td><td>Atidaro failo pasirinkimą → Import Wheelsys UI (SSO)</td></tr>
-        <tr><td><span class="pin">14</span></td><td>VIO patikrina, ar TV atsirado Wheelsys → matosi <strong>Imported fines</strong></td></tr>
+        <tr><td><span class="pin">12</span></td><td>Excel + SharePoint + atsisiuntimas + Wheelsys Import SSO; statusas → <em>In import file</em></td></tr>
+        <tr><td><span class="pin">13</span></td><td>VIO patikrina, ar TV atsirado Wheelsys → matosi <strong>Imported fines</strong></td></tr>
     </table>
 
     <h2>4. Greita šakų lentelė</h2>
@@ -281,7 +279,7 @@
         <div class="title">Minimalus dienos kelias</div>
         New fines → Fetch → Find driver → Details →
         <em>(Send / ePaslaugos / LV paketas)</em> →
-        Wheelsys import → Generate → Start import → Update status.
+        Wheelsys import → Start import → Update status.
     </div>
 
     <div class="footer">

@@ -81,14 +81,19 @@ final class FineReplyReadiness
         }
 
         // Same required template tokens as IncomingFineReplyBuilder::build().
+        // Corporate informee (no physical Driver): birth date is not required.
+        $party = (string) ($wheelsys['party'] ?? 'driver');
         if ($authority && filled($authority->mail_template)) {
             $template = (string) $authority->mail_template;
-            foreach ([
+            $checks = [
                 '[%2%]' => ['driver', (string) ($wheelsys['driver'] ?? $log->driver_name ?? '')],
                 '[%4%]' => ['vehicle', (string) ($wheelsys['vehicle'] ?? $log->vehicle ?? '')],
-                '[%7%]' => ['birth_date', (string) ($wheelsys['birth_date'] ?? '')],
                 '[%8%]' => ['email', (string) ($wheelsys['customer_email'] ?? '')],
-            ] as $token => [$label, $value]) {
+            ];
+            if ($party !== 'corporate') {
+                $checks['[%7%]'] = ['birth_date', (string) ($wheelsys['birth_date'] ?? '')];
+            }
+            foreach ($checks as $token => [$label, $value]) {
                 if (str_contains($template, $token) && trim($value) === '' && ! in_array($label, $missing, true)) {
                     $missing[] = $label;
                 }
@@ -106,6 +111,14 @@ final class FineReplyReadiness
                 if (! in_array('authority_to', $missing, true)) {
                     $missing[] = 'authority_to';
                 }
+            }
+        }
+
+        // Julianus (and flagged authorities): rental contract (RNT) must be tracked.
+        if ($authority && $authority->requiresContract()) {
+            $agrNo = trim((string) ($wheelsys['agr_no'] ?? $log->agr_no ?? ''));
+            if ($agrNo === '' && ! in_array('contract', $missing, true)) {
+                $missing[] = 'contract';
             }
         }
 
@@ -170,6 +183,7 @@ final class FineReplyReadiness
             'mail_template' => 'Authority mail template',
             'authority' => 'Authority match',
             'authority_to' => 'Authority To email',
+            'contract' => 'Rental contract (RNT)',
         ];
 
         $out = [];
@@ -195,7 +209,7 @@ final class FineReplyReadiness
             return 'ok';
         }
 
-        $critical = ['vehicle', 'driver', 'reference', 'authority', 'authority_to', 'mail_template', 'ticket_date'];
+        $critical = ['vehicle', 'driver', 'reference', 'authority', 'authority_to', 'mail_template', 'ticket_date', 'contract'];
         foreach ($missing as $key) {
             if (in_array($key, $critical, true)) {
                 return 'error';

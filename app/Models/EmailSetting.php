@@ -12,6 +12,7 @@ class EmailSetting extends Model
         'from_email',
         'reply_to',
         'subject',
+        'mail_signature',
         'o365_enabled',
         'o365_tenant_id',
         'o365_client_id',
@@ -71,6 +72,7 @@ class EmailSetting extends Model
      *     from_name: string,
      *     reply_to: string,
      *     subject: string,
+     *     mail_signature: string,
      *     inbox_mailbox: string
      * }
      */
@@ -96,8 +98,14 @@ class EmailSetting extends Model
             'from_name' => trim((string) ($settings?->from_name ?: config('mail.from.name'))),
             'reply_to' => trim((string) ($settings?->reply_to ?: env('MAIL_REPLY_TO_ADDRESS', ''))),
             'subject' => trim((string) ($settings?->subject ?: 'Violation notification')),
+            'mail_signature' => trim((string) ($settings?->mail_signature ?: '')),
             'inbox_mailbox' => trim((string) ($settings?->inbox_mailbox ?: '')),
         ];
+    }
+
+    public static function mailSignature(): string
+    {
+        return static::graphConfig()['mail_signature'];
     }
 
     /**

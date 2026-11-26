@@ -5,6 +5,7 @@ namespace App\Support;
 use App\Models\EmailSetting;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
+use Throwable;
 
 final class MicrosoftGraphSharePoint
 {
@@ -87,33 +88,53 @@ final class MicrosoftGraphSharePoint
         $config = EmailSetting::sharePointConfig();
         $folderPath = trim(str_replace('\\', '/', (string) ($folderPath ?? $config['folder_path'])), '/');
         $fileName = ltrim(str_replace('\\', '/', $fileName), '/');
-
-        if ($fileName === '' || str_contains($fileName, '/')) {
-            throw new RuntimeException('Upload file name must be a plain file name (no folders).');
-        }
-
         $relativePath = $folderPath !== '' ? $folderPath.'/'.$fileName : $fileName;
-        $encodedPath = implode('/', array_map(rawurlencode(...), explode('/', $relativePath)));
 
-        $siteId = $this->resolveSiteId($siteUrl);
-        $url = 'https://graph.microsoft.com/v1.0/sites/'.rawurlencode($siteId)
-            .'/drive/root:/'.$encodedPath.':/content';
+        try {
+            if ($fileName === '' || str_contains($fileName, '/')) {
+                throw new RuntimeException('Upload file name must be a plain file name (no folders).');
+            }
 
-        $response = Http::withToken($this->accessToken())
-            ->timeout(60)
-            ->withBody($contents, 'application/octet-stream')
-            ->put($url);
+            $encodedPath = implode('/', array_map(rawurlencode(...), explode('/', $relativePath)));
 
-        if (! $response->successful()) {
-            throw new RuntimeException('SharePoint upload failed: '.$response->body());
+            $siteId = $this->resolveSiteId($siteUrl);
+            $url = 'https://graph.microsoft.com/v1.0/sites/'.rawurlencode($siteId)
+                .'/drive/root:/'.$encodedPath.':/content';
+
+            $response = Http::withToken($this->accessToken())
+                ->timeout(60)
+                ->withBody($contents, 'application/octet-stream')
+                ->put($url);
+
+            if (! $response->successful()) {
+                throw new RuntimeException('SharePoint upload failed: '.$response->body());
+            }
+
+            $result = [
+                'id' => (string) ($response->json('id') ?? ''),
+                'name' => (string) ($response->json('name') ?? $fileName),
+                'webUrl' => (string) ($response->json('webUrl') ?? ''),
+                'size' => (int) ($response->json('size') ?? strlen($contents)),
+            ];
+
+            $this->logIo('write', [
+                'file' => $fileName,
+                'folder' => $folderPath,
+                'bytes' => strlen($contents),
+                'web_url' => $result['webUrl'] !== '' ? $result['webUrl'] : null,
+            ]);
+
+            return $result;
+        } catch (Throwable $e) {
+            $this->logIo('write', [
+                'file' => $fileName,
+                'folder' => $folderPath,
+                'bytes' => strlen($contents),
+                'error' => $e->getMessage(),
+            ], ok: false);
+
+            throw $e;
         }
-
-        return [
-            'id' => (string) ($response->json('id') ?? ''),
-            'name' => (string) ($response->json('name') ?? $fileName),
-            'webUrl' => (string) ($response->json('webUrl') ?? ''),
-            'size' => (int) ($response->json('size') ?? strlen($contents)),
-        ];
     }
 
     /**
@@ -128,30 +149,49 @@ final class MicrosoftGraphSharePoint
         $folderPath = trim(str_replace('\\', '/', (string) ($folderPath ?? $config['folder_path'])), '/');
         $fileName = ltrim(str_replace('\\', '/', $fileName), '/');
 
-        if ($fileName === '' || str_contains($fileName, '/')) {
-            throw new RuntimeException('Download file name must be a plain file name (no folders).');
+        try {
+            if ($fileName === '' || str_contains($fileName, '/')) {
+                throw new RuntimeException('Download file name must be a plain file name (no folders).');
+            }
+
+            $relativePath = $folderPath !== '' ? $folderPath.'/'.$fileName : $fileName;
+            $encodedPath = implode('/', array_map(rawurlencode(...), explode('/', $relativePath)));
+
+            $siteId = $this->resolveSiteId($siteUrl);
+            $url = 'https://graph.microsoft.com/v1.0/sites/'.rawurlencode($siteId)
+                .'/drive/root:/'.$encodedPath.':/content';
+
+            $response = Http::withToken($this->accessToken())
+                ->timeout(90)
+                ->withHeaders(['Accept' => 'application/octet-stream'])
+                ->get($url);
+
+            if (! $response->successful()) {
+                throw new RuntimeException('SharePoint download failed: '.$response->body());
+            }
+
+            $body = (string) $response->body();
+            $this->logIo('read', [
+                'file' => $fileName,
+                'folder' => $folderPath,
+                'bytes' => strlen($body),
+            ]);
+
+            return $body;
+        } catch (Throwable $e) {
+            $this->logIo('read', [
+                'file' => $fileName,
+                'folder' => $folderPath,
+                'error' => $e->getMessage(),
+            ], ok: false);
+
+            throw $e;
         }
-
-        $relativePath = $folderPath !== '' ? $folderPath.'/'.$fileName : $fileName;
-        $encodedPath = implode('/', array_map(rawurlencode(...), explode('/', $relativePath)));
-
-        $siteId = $this->resolveSiteId($siteUrl);
-        $url = 'https://graph.microsoft.com/v1.0/sites/'.rawurlencode($siteId)
-            .'/drive/root:/'.$encodedPath.':/content';
-
-        $response = Http::withToken($this->accessToken())
-            ->timeout(90)
-            ->withHeaders(['Accept' => 'application/octet-stream'])
-            ->get($url);
-
-        if (! $response->successful()) {
-            throw new RuntimeException('SharePoint download failed: '.$response->body());
-        }
-
-        return (string) $response->body();
     }
 
     /**
+     * Ensure a folder path exists under the site drive (creates missing segments).
+     *
      * @return array{id:string,name:string,webUrl:string}
      */
     public function ensureFolderExists(?string $folderPath = null, ?string $siteUrl = null): array
@@ -159,25 +199,110 @@ final class MicrosoftGraphSharePoint
         $config = EmailSetting::sharePointConfig();
         $folderPath = trim(str_replace('\\', '/', (string) ($folderPath ?? $config['folder_path'])), '/');
 
-        if ($folderPath === '') {
-            throw new RuntimeException('SharePoint folder path is empty.');
+        try {
+            if ($folderPath === '') {
+                throw new RuntimeException('SharePoint folder path is empty.');
+            }
+
+            $siteId = $this->resolveSiteId($siteUrl);
+            $token = $this->accessToken();
+            $segments = array_values(array_filter(
+                explode('/', $folderPath),
+                static fn (string $segment): bool => $segment !== '' && $segment !== '.' && $segment !== '..'
+            ));
+
+            $built = '';
+            $created = [];
+            $last = ['id' => '', 'name' => '', 'webUrl' => ''];
+
+            foreach ($segments as $segment) {
+                $built = $built === '' ? $segment : $built.'/'.$segment;
+                $encodedPath = implode('/', array_map(rawurlencode(...), explode('/', $built)));
+                $getUrl = 'https://graph.microsoft.com/v1.0/sites/'.rawurlencode($siteId).'/drive/root:/'.$encodedPath;
+
+                $response = Http::withToken($token)->timeout(30)->get($getUrl);
+                if ($response->successful()) {
+                    $last = [
+                        'id' => (string) ($response->json('id') ?? ''),
+                        'name' => (string) ($response->json('name') ?? $segment),
+                        'webUrl' => (string) ($response->json('webUrl') ?? ''),
+                    ];
+
+                    continue;
+                }
+
+                $parentPath = trim(dirname(str_replace('\\', '/', $built)), '/.');
+                if ($parentPath === '' || $parentPath === '.') {
+                    $createUrl = 'https://graph.microsoft.com/v1.0/sites/'.rawurlencode($siteId).'/drive/root/children';
+                } else {
+                    $parentEncoded = implode('/', array_map(rawurlencode(...), explode('/', $parentPath)));
+                    $createUrl = 'https://graph.microsoft.com/v1.0/sites/'.rawurlencode($siteId)
+                        .'/drive/root:/'.$parentEncoded.':/children';
+                }
+
+                $create = Http::withToken($token)
+                    ->timeout(30)
+                    ->post($createUrl, [
+                        'name' => $segment,
+                        'folder' => (object) [],
+                        '@microsoft.graph.conflictBehavior' => 'fail',
+                    ]);
+
+                if (! $create->successful()) {
+                    // Race / already created → re-fetch.
+                    $retry = Http::withToken($token)->timeout(30)->get($getUrl);
+                    if ($retry->successful()) {
+                        $last = [
+                            'id' => (string) ($retry->json('id') ?? ''),
+                            'name' => (string) ($retry->json('name') ?? $segment),
+                            'webUrl' => (string) ($retry->json('webUrl') ?? ''),
+                        ];
+
+                        continue;
+                    }
+
+                    throw new RuntimeException(
+                        'SharePoint folder create failed for '.$built.': '.$create->body()
+                    );
+                }
+
+                $last = [
+                    'id' => (string) ($create->json('id') ?? ''),
+                    'name' => (string) ($create->json('name') ?? $segment),
+                    'webUrl' => (string) ($create->json('webUrl') ?? ''),
+                ];
+                $created[] = $built;
+            }
+
+            $this->logIo('ensure_folder', [
+                'folder' => $folderPath,
+                'created_segments' => $created,
+                'web_url' => $last['webUrl'] !== '' ? $last['webUrl'] : null,
+            ]);
+
+            return $last;
+        } catch (Throwable $e) {
+            $this->logIo('ensure_folder', [
+                'folder' => $folderPath,
+                'error' => $e->getMessage(),
+            ], ok: false);
+
+            throw $e;
         }
+    }
 
-        $siteId = $this->resolveSiteId($siteUrl);
-        $encodedPath = implode('/', array_map(rawurlencode(...), explode('/', $folderPath)));
-
-        $response = Http::withToken($this->accessToken())
-            ->timeout(30)
-            ->get('https://graph.microsoft.com/v1.0/sites/'.rawurlencode($siteId).'/drive/root:/'.$encodedPath);
-
-        if ($response->successful()) {
-            return [
-                'id' => (string) ($response->json('id') ?? ''),
-                'name' => (string) ($response->json('name') ?? ''),
-                'webUrl' => (string) ($response->json('webUrl') ?? ''),
-            ];
+    /**
+     * @param  array<string, mixed>  $meta
+     */
+    private function logIo(string $op, array $meta = [], bool $ok = true): void
+    {
+        try {
+            ActivityLogger::log(
+                ($ok ? 'SharePoint: ' : 'SharePoint failed: ').$op,
+                meta: array_merge(['ok' => $ok, 'system' => 'sharepoint'], $meta),
+            );
+        } catch (Throwable) {
+            // Never break SharePoint IO because of logging.
         }
-
-        throw new RuntimeException('SharePoint folder not found (create it in SharePoint first): '.$folderPath.' — '.$response->body());
     }
 }

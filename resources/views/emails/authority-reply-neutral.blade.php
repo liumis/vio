@@ -13,12 +13,14 @@
                     <tr>
                         <td style="padding:28px 28px 24px 28px;">
                             <h1 style="margin:0 0 16px 0;font-size:20px;line-height:1.3;font-weight:700;color:#111111;">{{ $subject }}</h1>
-                            <div style="margin:0;font-size:15px;line-height:1.6;color:#111111;">
+                            <div style="margin:0;font-size:15px;line-height:1.7;color:#111111;">
                                 @php
                                     $escaped = e($contentText);
                                     $withBold = preg_replace('/\*\*(.+?)\*\*/u', '<strong>$1</strong>', $escaped) ?? $escaped;
+                                    // Preserve blank lines as paragraph spacing in email clients.
+                                    $withBreaks = nl2br($withBold, false);
                                 @endphp
-                                {!! nl2br($withBold) !!}
+                                {!! $withBreaks !!}
                             </div>
                         </td>
                     </tr>

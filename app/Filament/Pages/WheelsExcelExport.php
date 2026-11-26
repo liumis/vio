@@ -18,11 +18,11 @@ class WheelsExcelExport extends Page
 {
     protected static ?string $navigationIcon = 'heroicon-o-arrow-up-tray';
 
-    protected static ?string $navigationLabel = '2. Wheelsys import';
+    protected static ?string $navigationLabel = '2. To Wheelsys';
 
     protected static ?string $navigationGroup = 'Fines';
 
-    protected static ?string $title = 'Wheelsys import';
+    protected static ?string $title = 'To Wheelsys';
 
     protected static ?int $navigationSort = 2;
 
@@ -39,14 +39,16 @@ class WheelsExcelExport extends Page
     public array $fileFilters = [];
 
     /**
-     * ready | prepared | imported | missing (empty = any / unimported mode).
+     * ready | prepared | missing (empty = any within the active tab).
      *
      * @var list<string>
      */
     public array $statusFilters = [];
 
-    /** When false (default), hide fines already In Wheels. */
-    public bool $showImported = false;
+    /**
+     * Main list mode: awaiting (default) | imported.
+     */
+    public string $listTab = 'awaiting';
 
     public bool $showImportPicker = false;
 
@@ -71,7 +73,7 @@ class WheelsExcelExport extends Page
         $this->selectedIds = [];
         $this->fileFilters = [];
         $this->statusFilters = [];
-        $this->showImported = false;
+        $this->listTab = 'awaiting';
         $this->showImportPicker = false;
         $this->importPickerBatch = '';
         $this->importPickerShowImported = false;
@@ -85,7 +87,7 @@ class WheelsExcelExport extends Page
         $this->fileFilters = array_values(array_filter(array_map('strval', $this->fileFilters)));
         if ($this->fileFilters !== []) {
             $this->openBatches = $this->fileFilters;
-        } elseif (! in_array('__new__', $this->openBatches, true)) {
+        } elseif ($this->listTab === 'awaiting' && ! in_array('__new__', $this->openBatches, true)) {
             $this->openBatches = ['__new__'];
         }
     }
@@ -93,40 +95,43 @@ class WheelsExcelExport extends Page
     public function updatedStatusFilters(): void
     {
         $this->selectedIds = [];
-        $this->statusFilters = array_values(array_filter(array_map('strval', $this->statusFilters)));
-        if (! $this->showImported) {
-            $this->statusFilters = array_values(array_filter(
-                $this->statusFilters,
-                static fn (string $s): bool => $s !== 'imported'
-            ));
-        }
-    }
-
-    public function updatedShowImported(): void
-    {
-        $this->selectedIds = [];
-        if (! $this->showImported) {
-            $this->statusFilters = array_values(array_filter(
-                $this->statusFilters,
-                static fn (string $s): bool => $s !== 'imported'
-            ));
-        }
-    }
-
-    public function showAllFines(): void
-    {
-        $this->showImported = true;
-        $this->selectedIds = [];
-    }
-
-    public function showUnimportedOnly(): void
-    {
-        $this->showImported = false;
         $this->statusFilters = array_values(array_filter(
-            $this->statusFilters,
-            static fn (string $s): bool => $s !== 'imported'
+            array_map('strval', $this->statusFilters),
+            static fn (string $s): bool => in_array($s, ['ready', 'prepared', 'missing'], true)
         ));
+    }
+
+    public function setListTab(string $tab): void
+    {
+        $tab = $tab === 'imported' ? 'imported' : 'awaiting';
+        if ($this->listTab === $tab) {
+            return;
+        }
+
+        $this->listTab = $tab;
         $this->selectedIds = [];
+        $this->statusFilters = [];
+
+        if ($tab === 'awaiting') {
+            $this->openBatches = $this->fileFilters !== [] ? $this->fileFilters : ['__new__'];
+        } elseif ($this->fileFilters !== []) {
+            $this->openBatches = $this->fileFilters;
+        } else {
+            // Open newest import day with all files expanded.
+            $firstDay = $this->logDayGroups[0] ?? null;
+            if ($firstDay === null) {
+                $this->openBatches = [];
+            } else {
+                $keys = [(string) $firstDay['key']];
+                foreach ($firstDay['files'] as $file) {
+                    $fileKey = (string) ($file['key'] ?? '');
+                    if ($fileKey !== '') {
+                        $keys[] = $fileKey;
+                    }
+                }
+                $this->openBatches = $keys;
+            }
+        }
     }
 
     public function updatedImportPickerShowImported(): void
@@ -157,9 +162,9 @@ class WheelsExcelExport extends Page
     {
         $this->fileFilters = [];
         $this->statusFilters = [];
-        // Keep showImported as the user left it — only clear file/status picks.
+        // Keep listTab as the user left it — only clear file/status picks.
         $this->selectedIds = [];
-        $this->openBatches = ['__new__'];
+        $this->openBatches = $this->listTab === 'awaiting' ? ['__new__'] : [];
     }
 
     /**
@@ -180,16 +185,53 @@ class WheelsExcelExport extends Page
      */
     public function getStatusMultiSelectOptionsProperty(): array
     {
-        $options = [
+        // Status chips only refine the Awaiting tab (Imported tab is already filtered).
+        return [
             'ready' => 'Ready',
             'prepared' => 'In import file',
             'missing' => 'Missing in Wheels',
         ];
-        if ($this->showImported) {
-            $options['imported'] = 'In Wheels';
+    }
+
+    /**
+     * Badge counts for the Awaiting / Imported tabs (respects Import file filter).
+     *
+     * @return array{awaiting: int, imported: int}
+     */
+    public function getTabCountsProperty(): array
+    {
+        $base = FineProcessLog::query()
+            ->whereNotNull('vehicle')
+            ->where('vehicle', '!=', '')
+            ->whereNotNull('driver_name')
+            ->where('driver_name', '!=', '')
+            ->where(function ($q): void {
+                $q->whereNull('wheels_export_status')
+                    ->orWhereNotIn('wheels_export_status', [
+                        FineProcessLog::WHEELS_EXPORT_SKIPPED,
+                        FineProcessLog::WHEELS_EXPORT_NEEDS_REVIEW,
+                    ]);
+            });
+
+        if ($this->fileFilters !== []) {
+            $base->whereIn('wheels_export_batch', $this->fileFilters);
         }
 
-        return $options;
+        $imported = (clone $base)
+            ->where('wheels_import_status', FineProcessLog::WHEELS_IMPORT_IMPORTED)
+            ->count();
+
+        $awaiting = (clone $base)
+            ->where(function ($q): void {
+                $q->whereNull('wheels_import_status')
+                    ->orWhere('wheels_import_status', '!=', FineProcessLog::WHEELS_IMPORT_IMPORTED);
+            })
+            ->count();
+
+        return [
+            'awaiting' => $awaiting,
+            'imported' => $imported,
+        ];
     }
 
     /**
@@ -237,34 +279,36 @@ class WheelsExcelExport extends Page
             $query->whereIn('wheels_export_batch', $this->fileFilters);
         }
 
-        if ($this->statusFilters !== []) {
-            $query->where(function ($outer) {
-                foreach ($this->statusFilters as $status) {
-                    $outer->orWhere(function ($q) use ($status): void {
-                        if ($status === 'ready') {
-                            $q->where(function ($inner): void {
-                                $inner->whereNull('wheels_export_status')
-                                    ->orWhere('wheels_export_status', FineProcessLog::WHEELS_EXPORT_PENDING);
-                            });
-                        } elseif ($status === 'prepared') {
-                            $q->where('wheels_export_status', FineProcessLog::WHEELS_EXPORT_EXPORTED)
-                                ->where(function ($inner): void {
-                                    $inner->whereNull('wheels_import_status')
-                                        ->orWhere('wheels_import_status', FineProcessLog::WHEELS_IMPORT_AWAITING);
-                                });
-                        } elseif ($status === 'missing') {
-                            $q->where('wheels_import_status', FineProcessLog::WHEELS_IMPORT_MISSING);
-                        } elseif ($status === 'imported') {
-                            $q->where('wheels_import_status', FineProcessLog::WHEELS_IMPORT_IMPORTED);
-                        }
-                    });
-                }
-            });
-        } elseif (! $this->showImported) {
+        if ($this->listTab === 'imported') {
+            $query->where('wheels_import_status', FineProcessLog::WHEELS_IMPORT_IMPORTED);
+        } else {
             $query->where(function ($q): void {
                 $q->whereNull('wheels_import_status')
                     ->orWhere('wheels_import_status', '!=', FineProcessLog::WHEELS_IMPORT_IMPORTED);
             });
+
+            if ($this->statusFilters !== []) {
+                $query->where(function ($outer) {
+                    foreach ($this->statusFilters as $status) {
+                        $outer->orWhere(function ($q) use ($status): void {
+                            if ($status === 'ready') {
+                                $q->where(function ($inner): void {
+                                    $inner->whereNull('wheels_export_status')
+                                        ->orWhere('wheels_export_status', FineProcessLog::WHEELS_EXPORT_PENDING);
+                                });
+                            } elseif ($status === 'prepared') {
+                                $q->where('wheels_export_status', FineProcessLog::WHEELS_EXPORT_EXPORTED)
+                                    ->where(function ($inner): void {
+                                        $inner->whereNull('wheels_import_status')
+                                            ->orWhere('wheels_import_status', FineProcessLog::WHEELS_IMPORT_AWAITING);
+                                    });
+                            } elseif ($status === 'missing') {
+                                $q->where('wheels_import_status', FineProcessLog::WHEELS_IMPORT_MISSING);
+                            }
+                        });
+                    }
+                });
+            }
         }
 
         return $query
@@ -277,6 +321,7 @@ class WheelsExcelExport extends Page
 
     /**
      * Accordion groups: new (not in a file) first, then each import file (newest first).
+     * Used by the Awaiting tab (flat file list).
      *
      * @return list<array{
      *     key: string,
@@ -286,16 +331,108 @@ class WheelsExcelExport extends Page
      *     is_new: bool,
      *     import_status: 'new'|'imported'|'not_imported'|'partial',
      *     import_label: string,
+     *     imported_at_label: string|null,
      *     logs: list<FineProcessLog>
      * }>
      */
     public function getLogGroupsProperty(): array
     {
+        $built = $this->buildFileGroupsFromLogs($this->logs);
+        $groups = [];
+
+        // "New" only on Awaiting — Imported fines are always tied to an import file.
+        if ($this->listTab === 'awaiting' && $this->fileFilters === []) {
+            $groups[] = [
+                'key' => '__new__',
+                'title' => 'New · not in a file yet',
+                'subtitle' => $built['newLogs'] === []
+                    ? 'None waiting'
+                    : count($built['newLogs']).' ready for Start import',
+                'sharepoint_url' => null,
+                'is_new' => true,
+                'import_status' => 'new',
+                'import_label' => 'Not in file',
+                'imported_at_label' => null,
+                'logs' => $built['newLogs'],
+            ];
+        }
+
+        foreach ($built['files'] as $batch => $file) {
+            $groups[] = $this->makeFileGroupPayload($batch, $file);
+        }
+
+        return $groups;
+    }
+
+    /**
+     * Imported tab: accordion by import day → nested accordion by import file.
+     *
+     * @return list<array{
+     *     key: string,
+     *     title: string,
+     *     subtitle: string,
+     *     imported_at_label: string|null,
+     *     fine_count: int,
+     *     file_count: int,
+     *     files: list<array<string, mixed>>
+     * }>
+     */
+    public function getLogDayGroupsProperty(): array
+    {
+        $built = $this->buildFileGroupsFromLogs($this->logs);
+        /** @var array<string, array{files: list<array<string, mixed>>, fine_count: int, sort: string}> $days */
+        $days = [];
+
+        foreach ($built['files'] as $batch => $file) {
+            $fileGroup = $this->makeFileGroupPayload($batch, $file);
+            $dayKey = $fileGroup['imported_at_label'] !== null
+                ? substr($fileGroup['imported_at_label'], 0, 10)
+                : 'unknown';
+
+            if (! isset($days[$dayKey])) {
+                $days[$dayKey] = [
+                    'files' => [],
+                    'fine_count' => 0,
+                    'sort' => $dayKey === 'unknown' ? '0000-00-00' : $dayKey,
+                ];
+            }
+            $days[$dayKey]['files'][] = $fileGroup;
+            $days[$dayKey]['fine_count'] += count($fileGroup['logs']);
+        }
+
+        uasort($days, static fn (array $a, array $b): int => strcmp($b['sort'], $a['sort']));
+
+        $out = [];
+        foreach ($days as $dayKey => $day) {
+            $fileCount = count($day['files']);
+            $out[] = [
+                'key' => 'day:'.$dayKey,
+                'title' => $dayKey === 'unknown' ? 'No import date' : $dayKey,
+                'subtitle' => $fileCount.' file(s) · '.$day['fine_count'].' fine(s)',
+                'imported_at_label' => $dayKey === 'unknown' ? null : $dayKey,
+                'fine_count' => $day['fine_count'],
+                'file_count' => $fileCount,
+                'files' => $day['files'],
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  list<FineProcessLog>  $logs
+     * @return array{
+     *     newLogs: list<FineProcessLog>,
+     *     files: array<string, array{title:string,subtitle:?string,sharepoint_url:?string,exported_at:?string,logs:list<FineProcessLog>}>
+     * }
+     */
+    private function buildFileGroupsFromLogs(array $logs): array
+    {
         $newLogs = [];
         /** @var array<string, array{title:string,subtitle:?string,sharepoint_url:?string,exported_at:?string,logs:list<FineProcessLog>}> $files */
         $files = [];
 
-        foreach ($this->logs as $log) {
+        foreach ($logs as $log) {
             $inFile = $log->wheels_export_status === FineProcessLog::WHEELS_EXPORT_EXPORTED
                 && filled($log->wheels_export_batch);
 
@@ -327,69 +464,95 @@ class WheelsExcelExport extends Page
             return strcmp((string) ($b['exported_at'] ?? ''), (string) ($a['exported_at'] ?? ''));
         });
 
-        $groups = [];
-        // Always show "New" on top unless filtering a specific import file.
-        if ($this->fileFilters === []) {
-            $groups[] = [
-                'key' => '__new__',
-                'title' => 'New · not in a file yet',
-                'subtitle' => $newLogs === []
-                    ? 'None waiting'
-                    : count($newLogs).' ready for Generate import file',
-                'sharepoint_url' => null,
-                'is_new' => true,
-                'import_status' => 'new',
-                'import_label' => 'Not in file',
-                'logs' => $newLogs,
-            ];
-        }
+        return ['newLogs' => $newLogs, 'files' => $files];
+    }
 
-        foreach ($files as $batch => $file) {
-            $importMeta = $this->fileImportStatus($file['logs']);
-            $groups[] = [
-                'key' => $batch,
-                'title' => $file['title'],
-                'subtitle' => trim(($file['subtitle'] ? 'Prepared '.$file['subtitle'].' · ' : '').count($file['logs']).' fine(s)'),
-                'sharepoint_url' => $file['sharepoint_url'],
-                'is_new' => false,
-                'import_status' => $importMeta['status'],
-                'import_label' => $importMeta['label'],
-                'logs' => $file['logs'],
-            ];
+    /**
+     * @param  array{title:string,subtitle:?string,sharepoint_url:?string,exported_at:?string,logs:list<FineProcessLog>}  $file
+     * @return array{
+     *     key: string,
+     *     title: string,
+     *     subtitle: string,
+     *     imported_at_label: string|null,
+     *     sharepoint_url: string|null,
+     *     is_new: bool,
+     *     import_status: 'imported'|'not_imported'|'partial',
+     *     import_label: string,
+     *     logs: list<FineProcessLog>
+     * }
+     */
+    private function makeFileGroupPayload(string $batch, array $file): array
+    {
+        $importMeta = $this->fileImportStatus($file['logs']);
+        $importedAtLabel = $importMeta['imported_at_label'];
+        $subtitleParts = [];
+        if ($file['subtitle']) {
+            $subtitleParts[] = 'Prepared '.$file['subtitle'];
         }
+        if ($importedAtLabel !== null) {
+            $subtitleParts[] = 'Imported '.$importedAtLabel;
+        }
+        $subtitleParts[] = count($file['logs']).' fine(s)';
 
-        return $groups;
+        return [
+            'key' => $batch,
+            'title' => $file['title'],
+            'subtitle' => implode(' · ', $subtitleParts),
+            'imported_at_label' => $importedAtLabel,
+            'sharepoint_url' => $file['sharepoint_url'],
+            'is_new' => false,
+            'import_status' => $importMeta['status'],
+            'import_label' => $importMeta['label'],
+            'logs' => $file['logs'],
+        ];
     }
 
     /**
      * @param  list<FineProcessLog>  $logs
-     * @return array{status: 'imported'|'not_imported'|'partial', label: string}
+     * @return array{status: 'imported'|'not_imported'|'partial', label: string, imported_at_label: string|null}
      */
     private function fileImportStatus(array $logs): array
     {
         $total = count($logs);
         if ($total === 0) {
-            return ['status' => 'not_imported', 'label' => 'Not imported'];
+            return ['status' => 'not_imported', 'label' => 'Not imported', 'imported_at_label' => null];
         }
 
         $imported = 0;
+        $latestImportedAt = null;
         foreach ($logs as $log) {
-            if ($log->wheels_import_status === FineProcessLog::WHEELS_IMPORT_IMPORTED) {
-                $imported++;
+            if ($log->wheels_import_status !== FineProcessLog::WHEELS_IMPORT_IMPORTED) {
+                continue;
+            }
+            $imported++;
+            $at = $log->wheels_imported_at;
+            if ($at !== null && ($latestImportedAt === null || $at->gt($latestImportedAt))) {
+                $latestImportedAt = $at;
             }
         }
 
+        $importedAtLabel = $latestImportedAt
+            ? $latestImportedAt->timezone(config('app.timezone'))->format('Y-m-d H:i')
+            : null;
+
         if ($imported === $total) {
-            return ['status' => 'imported', 'label' => 'Imported'];
+            return [
+                'status' => 'imported',
+                'label' => $importedAtLabel !== null ? 'Imported '.$importedAtLabel : 'Imported',
+                'imported_at_label' => $importedAtLabel,
+            ];
         }
 
         if ($imported === 0) {
-            return ['status' => 'not_imported', 'label' => 'Not imported'];
+            return ['status' => 'not_imported', 'label' => 'Not imported', 'imported_at_label' => null];
         }
 
         return [
             'status' => 'partial',
-            'label' => 'Partial · '.$imported.'/'.$total.' imported',
+            'label' => $importedAtLabel !== null
+                ? 'Partial · '.$imported.'/'.$total.' · '.$importedAtLabel
+                : 'Partial · '.$imported.'/'.$total.' imported',
+            'imported_at_label' => $importedAtLabel,
         ];
     }
 
@@ -405,6 +568,22 @@ class WheelsExcelExport extends Page
         }
 
         $this->openBatches[] = $key;
+
+        // Expanding an import day → expand all files inside it.
+        if (str_starts_with($key, 'day:')) {
+            foreach ($this->logDayGroups as $day) {
+                if ((string) ($day['key'] ?? '') !== $key) {
+                    continue;
+                }
+                foreach ($day['files'] as $file) {
+                    $fileKey = (string) ($file['key'] ?? '');
+                    if ($fileKey !== '' && ! in_array($fileKey, $this->openBatches, true)) {
+                        $this->openBatches[] = $fileKey;
+                    }
+                }
+                break;
+            }
+        }
     }
 
     public function isBatchOpen(string $key): bool
@@ -511,15 +690,78 @@ class WheelsExcelExport extends Page
         $this->selectedIds = ($all !== [] && $selected === $sortedAll) ? [] : $all;
     }
 
-    public function generateImportFile()
+    /**
+     * One-shot: selected ready fines → build Excel → download + open Wheelsys Import.
+     * No selection → picker for an already prepared file.
+     */
+    public function startImport()
     {
+        $this->importPickerShowImported = false;
+
         $ids = $this->selectedReadyIds();
-        if ($ids === []) {
-            Notification::make()->warning()->title('Select ready fines first')->send();
+        if ($ids !== []) {
+            $result = $this->buildImportFileForIds($ids);
+            if ($result === null) {
+                return null;
+            }
+
+            $this->importPickerBatch = (string) $result['batch'];
+            $this->fileFilters = [$this->importPickerBatch];
+            $this->statusFilters = ['prepared'];
+            $this->openBatches = $this->fileFilters;
+            $this->selectedIds = [];
+
+            return $this->downloadPreparedImportAndOpenWheelsys(
+                fileName: (string) ($result['file_name'] ?? ''),
+                count: (int) ($result['count'] ?? 0),
+                alreadyImportedWarning: false,
+            );
+        }
+
+        $anyPrepared = FineProcessLog::query()
+            ->where('wheels_export_status', FineProcessLog::WHEELS_EXPORT_EXPORTED)
+            ->whereNotNull('wheels_export_batch')
+            ->where('wheels_export_batch', '!=', '')
+            ->exists();
+        if (! $anyPrepared) {
+            Notification::make()
+                ->warning()
+                ->title('Select ready fines first')
+                ->body('Mark fines under New, then Start import — or prepare a file earlier.')
+                ->send();
 
             return null;
         }
 
+        $preselect = $this->fileFilters[0] ?? '';
+        if ($preselect === '') {
+            $selected = array_values(array_filter(array_map('intval', $this->selectedIds)));
+            if ($selected !== []) {
+                $preselect = (string) (FineProcessLog::query()
+                    ->whereIn('id', $selected)
+                    ->whereNotNull('wheels_export_batch')
+                    ->orderByDesc('wheels_exported_at')
+                    ->value('wheels_export_batch') ?? '');
+            }
+        }
+
+        $visible = $this->importFileChoices;
+        if ($preselect === '' || ! isset($visible[$preselect])) {
+            $preselect = $visible === [] ? '' : (string) array_key_first($visible);
+        }
+
+        $this->importPickerBatch = $preselect;
+        $this->showImportPicker = true;
+
+        return null;
+    }
+
+    /**
+     * @param  list<int>  $ids
+     * @return array{path: string, batch: string, count: int, file_name?: string, sharepoint_url?: string}|null
+     */
+    private function buildImportFileForIds(array $ids): ?array
+    {
         $logs = FineProcessLog::query()
             ->whereIn('id', $ids)
             ->where(function ($q): void {
@@ -539,7 +781,6 @@ class WheelsExcelExport extends Page
             return null;
         }
 
-        // Ensure pending status before export.
         foreach ($logs as $log) {
             if ($log->wheels_export_status !== FineProcessLog::WHEELS_EXPORT_PENDING) {
                 $log->fill(['wheels_export_status' => FineProcessLog::WHEELS_EXPORT_PENDING])->save();
@@ -550,72 +791,14 @@ class WheelsExcelExport extends Page
             $result = app(WheelsysTrafficViolationExcelExporter::class)
                 ->exportUploadAndMark($logs, Auth::id());
         } catch (Throwable $e) {
-            Notification::make()->danger()->title('Generate import file failed')->body($e->getMessage())->send();
+            Notification::make()->danger()->title('Import file failed')->body($e->getMessage())->send();
 
             return null;
         }
 
         @unlink($result['path']);
 
-        $this->selectedIds = [];
-        $this->fileFilters = [(string) $result['batch']];
-        $this->statusFilters = ['prepared'];
-        $this->openBatches = $this->fileFilters;
-
-        Notification::make()
-            ->success()
-            ->title('Import file ready')
-            ->body(($result['file_name'] ?? $result['batch']).' · '.$result['count'].' fine(s) · Start import when ready')
-            ->send();
-
-        if (filled($result['sharepoint_url'] ?? null)) {
-            $this->js('window.open('.Js::from($result['sharepoint_url']).', "_blank")');
-        }
-
-        return null;
-    }
-
-    /**
-     * Open intermediate picker: choose import file, preview fines, then Import.
-     */
-    public function startImport(): void
-    {
-        $this->importPickerShowImported = false;
-
-        $anyPrepared = FineProcessLog::query()
-            ->where('wheels_export_status', FineProcessLog::WHEELS_EXPORT_EXPORTED)
-            ->whereNotNull('wheels_export_batch')
-            ->where('wheels_export_batch', '!=', '')
-            ->exists();
-        if (! $anyPrepared) {
-            Notification::make()
-                ->warning()
-                ->title('No import files yet')
-                ->body('Generate an import file first.')
-                ->send();
-
-            return;
-        }
-
-        $preselect = $this->fileFilters[0] ?? '';
-        if ($preselect === '') {
-            $ids = array_values(array_filter(array_map('intval', $this->selectedIds)));
-            if ($ids !== []) {
-                $preselect = (string) (FineProcessLog::query()
-                    ->whereIn('id', $ids)
-                    ->whereNotNull('wheels_export_batch')
-                    ->orderByDesc('wheels_exported_at')
-                    ->value('wheels_export_batch') ?? '');
-            }
-        }
-
-        $visible = $this->importFileChoices;
-        if ($preselect === '' || ! isset($visible[$preselect])) {
-            $preselect = $visible === [] ? '' : (string) array_key_first($visible);
-        }
-
-        $this->importPickerBatch = $preselect;
-        $this->showImportPicker = true;
+        return $result;
     }
 
     public function closeImportPicker(): void
@@ -761,19 +944,97 @@ class WheelsExcelExport extends Page
             return null;
         }
 
-        $fileName = (string) ($file['file_name'] ?? '');
+        return $this->runPreparedImport(
+            batch: (string) ($file['batch'] ?? $this->importPickerBatch),
+            fileName: (string) ($file['file_name'] ?? ''),
+            count: (int) ($file['count'] ?? 0),
+            alreadyImportedWarning: (bool) ($this->importPickerStats['already_imported'] ?? false),
+            alreadyImportedDetail: (($this->importPickerStats['imported'] ?? 0).' of '.($this->importPickerStats['total'] ?? 0)
+                .' fine(s) are already In Wheels. Re-import may create duplicates — continue carefully.'),
+        );
+    }
+
+    /**
+     * One-click from a prepared file accordion: download Excel + open Wheels Import.
+     */
+    public function importPreparedBatch(string $batch)
+    {
+        $batch = trim($batch);
+        if ($batch === '') {
+            Notification::make()->warning()->title('Import file missing')->send();
+
+            return null;
+        }
+
+        $this->importPickerShowImported = true;
+        $choices = $this->importFileChoices;
+        $file = $choices[$batch] ?? null;
+        if ($file === null) {
+            Notification::make()
+                ->warning()
+                ->title('Prepared file not found')
+                ->body('Batch '.$batch.' has no Excel file on record.')
+                ->send();
+
+            return null;
+        }
+
+        $imported = (int) ($file['imported_count'] ?? 0);
+        $total = (int) ($file['count'] ?? 0);
+
+        return $this->runPreparedImport(
+            batch: $batch,
+            fileName: (string) ($file['file_name'] ?? ''),
+            count: $total,
+            alreadyImportedWarning: $imported > 0,
+            alreadyImportedDetail: $imported.' of '.$total
+                .' fine(s) are already In Wheels. Re-import may create duplicates — continue carefully.',
+        );
+    }
+
+    private function runPreparedImport(
+        string $batch,
+        string $fileName,
+        int $count,
+        bool $alreadyImportedWarning = false,
+        string $alreadyImportedDetail = '',
+    ) {
         if ($fileName === '') {
             Notification::make()->warning()->title('Import file name missing')->send();
 
             return null;
         }
 
-        $stats = $this->importPickerStats;
-        if ($stats['already_imported']) {
+        $this->showImportPicker = false;
+        $this->importPickerBatch = $batch;
+        $this->fileFilters = $batch !== '' ? [$batch] : [];
+        $this->openBatches = $this->fileFilters !== [] ? $this->fileFilters : ['__new__'];
+
+        return $this->downloadPreparedImportAndOpenWheelsys(
+            fileName: $fileName,
+            count: $count,
+            alreadyImportedWarning: $alreadyImportedWarning,
+            alreadyImportedDetail: $alreadyImportedDetail,
+        );
+    }
+
+    private function downloadPreparedImportAndOpenWheelsys(
+        string $fileName,
+        int $count,
+        bool $alreadyImportedWarning = false,
+        string $alreadyImportedDetail = '',
+    ) {
+        if ($fileName === '') {
+            Notification::make()->warning()->title('Import file name missing')->send();
+
+            return null;
+        }
+
+        if ($alreadyImportedWarning) {
             Notification::make()
                 ->warning()
                 ->title('File was already imported')
-                ->body($stats['imported'].' of '.$stats['total'].' fine(s) are already In Wheels. Re-import may create duplicates — continue carefully.')
+                ->body($alreadyImportedDetail !== '' ? $alreadyImportedDetail : 'Re-import may create duplicates.')
                 ->persistent()
                 ->send();
         }
@@ -791,23 +1052,19 @@ class WheelsExcelExport extends Page
             return null;
         }
 
-        // Wheelsys tab is opened synchronously from the Import button click (avoids popup blockers).
-        // This action only prepares the Excel download.
-
-        $this->showImportPicker = false;
-        $this->fileFilters = $this->importPickerBatch !== '' ? [$this->importPickerBatch] : [];
-        $this->openBatches = $this->fileFilters !== [] ? $this->fileFilters : ['__new__'];
-
         $autoUser = EmailSetting::wheelsysConfig()['username'];
         Notification::make()
             ->success()
             ->title('Downloading · Wheels Import opening')
             ->body(
-                $fileName.' · '.$file['count'].' fine(s) · SSO as '
+                $fileName.' · '.$count.' fine(s) · SSO as '
                 .($autoUser !== '' ? $autoUser : 'VIO automation')
                 .' · then Traffic violation → Select import.'
             )
             ->send();
+
+        // Popup may be blocked if not from a direct click; still try after generate path.
+        $this->js('window.open('.Js::from($this->wheelsysImportSsoUrl()).', "_blank", "noopener,noreferrer")');
 
         $tempPath = storage_path('app/private/'.uniqid('wheels-import-', true).'.xlsx');
         if (! is_dir(dirname($tempPath))) {
@@ -831,31 +1088,35 @@ class WheelsExcelExport extends Page
         return '/wheelsys/open?'.http_build_query(['return' => $importPath]);
     }
 
-    public function verifyInWheelsys(): void
+    /**
+     * Confirm this prepared file exists in Wheelsys (first+last bookends).
+     */
+    public function updateWheelsysStatus(string $batch): void
     {
-        $ids = array_values(array_filter(array_map('intval', $this->selectedIds)));
+        $batch = trim($batch);
+        if ($batch === '') {
+            Notification::make()->warning()->title('Import file missing')->send();
 
-        $query = FineProcessLog::query()
+            return;
+        }
+
+        $logs = FineProcessLog::query()
+            ->where('wheels_export_batch', $batch)
             ->where('wheels_export_status', FineProcessLog::WHEELS_EXPORT_EXPORTED)
             ->where(function ($q): void {
                 $q->whereNull('wheels_import_status')
                     ->orWhere('wheels_import_status', FineProcessLog::WHEELS_IMPORT_AWAITING)
                     ->orWhere('wheels_import_status', FineProcessLog::WHEELS_IMPORT_MISSING);
-            });
-
-        if ($ids !== []) {
-            $query->whereIn('id', $ids);
-        } elseif ($this->fileFilters !== []) {
-            $query->whereIn('wheels_export_batch', $this->fileFilters);
-        }
-
-        $logs = $query->orderBy('id')->limit(100)->get();
+            })
+            ->orderBy('id')
+            ->limit(200)
+            ->get();
 
         if ($logs->isEmpty()) {
             Notification::make()
                 ->warning()
                 ->title('Nothing to update')
-                ->body('Select prepared fines, or filter by import file.')
+                ->body('This file is already marked Imported, or has no awaiting fines.')
                 ->send();
 
             return;
@@ -873,15 +1134,20 @@ class WheelsExcelExport extends Page
             'verified' => $result['verified'],
             'missing' => $result['missing'],
             'skipped' => $result['skipped'],
+            'batches' => $result['batches'] ?? 0,
             'checked' => $logs->count(),
+            'batch' => $batch,
+            'strategy' => 'bookends',
+            'source' => 'to_wheelsys_file',
         ]);
-
-        $this->selectedIds = [];
 
         $body = $result['verified'].' in Wheels · '.$result['missing'].' missing · '.$result['skipped'].' skipped';
         $notification = Notification::make()->title('Wheelsys status updated')->body($body);
         if ($result['verified'] > 0 && $result['missing'] === 0) {
             $notification->success();
+            $this->listTab = 'imported';
+            $this->fileFilters = [$batch];
+            $this->openBatches = ['day:'.now(config('app.timezone'))->format('Y-m-d'), $batch];
         } else {
             $notification->warning();
         }

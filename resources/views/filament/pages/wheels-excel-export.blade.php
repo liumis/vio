@@ -90,16 +90,61 @@
         .vio-acc-status-not_imported { background: #fffbeb; color: #b45309; border: 1px solid #fbbf24; }
         .vio-acc-status-partial { background: #f0f9ff; color: #0369a1; border: 1px solid #7dd3fc; }
         .vio-acc-status-new { background: #f1f5f9; color: #475569; }
+        .vio-acc-imported-when {
+            flex-shrink: 0; font-size: 12px; font-weight: 800; color: #047857;
+            font-variant-numeric: tabular-nums; letter-spacing: .01em;
+            white-space: nowrap;
+        }
+        .vio-acc-day {
+            border-radius: 16px; background: #fff; border: 1px solid #cbd5e1;
+            box-shadow: 0 10px 28px rgba(34,58,78,.07); overflow: hidden;
+        }
+        .vio-acc-day + .vio-acc-day { margin-top: 14px; }
+        .vio-acc-day > .vio-acc-head {
+            background: linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+            padding: 16px 18px;
+        }
+        .vio-acc-day > .vio-acc-head:hover { background: #e8eef5; }
+        .vio-acc-day .vio-acc-title { font-size: 15px; font-weight: 800; }
+        .vio-acc-day-body { padding: 10px 12px 12px; background: #f8fafc; border-top: 1px solid #e2e8f0; }
+        .vio-acc-nested { border-color: #e2e8f0; box-shadow: 0 4px 14px rgba(34,58,78,.04); }
+        .vio-acc-nested + .vio-acc-nested { margin-top: 8px; }
         .vio-acc-body { border-top: 1px solid #e2e8f0; }
         .vio-acc-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 16px; background: #fff; border-bottom: 1px solid #f1f5f9; }
+        .vio-list-tabs {
+            display: inline-flex; gap: 4px; padding: 4px; border-radius: 12px;
+            background: #f1f5f9; border: 1px solid #e2e8f0;
+        }
+        .vio-list-tab {
+            display: inline-flex; align-items: center; gap: 8px;
+            border: 0; background: transparent; cursor: pointer;
+            border-radius: 9px; padding: 8px 14px;
+            font-size: 13px; font-weight: 650; color: #64748b;
+            transition: background .12s ease, color .12s ease, box-shadow .12s ease;
+        }
+        .vio-list-tab:hover { color: #0f172a; background: rgba(255,255,255,.55); }
+        .vio-list-tab.is-active {
+            background: #fff; color: #0f172a;
+            box-shadow: 0 1px 2px rgba(15,23,42,.06), 0 0 0 1px rgba(226,232,240,.9);
+        }
+        .vio-list-tab-count {
+            font-size: 11px; font-weight: 700; line-height: 1;
+            border-radius: 999px; padding: 3px 7px;
+            background: #e2e8f0; color: #475569;
+        }
+        .vio-list-tab.is-active .vio-list-tab-count { background: #dbeafe; color: #1d4ed8; }
+        .vio-list-tab.is-active[data-tab="imported"] .vio-list-tab-count {
+            background: #d1fae5; color: #047857;
+        }
     </style>
 
     <div class="vio-import-hero">
         <p class="vio-import-kicker">Fines with driver</p>
-        <h2 class="vio-import-title">Wheelsys import</h2>
+        <h2 class="vio-import-title">To Wheelsys</h2>
         <p class="vio-import-note">
-            Select ready fines → <strong style="color:#fff">Generate import file</strong> →
-            <strong style="color:#fff">Start import</strong> in Wheels → <strong style="color:#fff">Update Wheelsys status</strong>.
+            Ready fines → select → <strong style="color:#fff">Start import</strong> (builds Excel + opens Wheels).
+            Already <strong style="color:#fff">Prepared</strong> → <strong style="color:#fff">Download &amp; open Wheels</strong>,
+            then <strong style="color:#fff">Update status</strong> on that file.
         </p>
     </div>
 
@@ -114,7 +159,37 @@
             collect($this->statusMultiSelectOptions)->map(fn ($label, $value) => ['value' => (string) $value, 'label' => (string) $label])->values()->all()
         );
         $filtersActive = $fileFilterValues !== [] || $statusFilterValues !== [];
+        $tabCounts = $this->tabCounts;
+        $isAwaitingTab = $listTab !== 'imported';
     @endphp
+
+    <div class="mb-3">
+        <div class="vio-list-tabs" role="tablist" aria-label="Import list">
+            <button
+                type="button"
+                role="tab"
+                data-tab="awaiting"
+                class="vio-list-tab {{ $isAwaitingTab ? 'is-active' : '' }}"
+                aria-selected="{{ $isAwaitingTab ? 'true' : 'false' }}"
+                wire:click="setListTab('awaiting')"
+            >
+                Awaiting import
+                <span class="vio-list-tab-count">{{ $tabCounts['awaiting'] }}</span>
+            </button>
+            <button
+                type="button"
+                role="tab"
+                data-tab="imported"
+                class="vio-list-tab {{ ! $isAwaitingTab ? 'is-active' : '' }}"
+                aria-selected="{{ ! $isAwaitingTab ? 'true' : 'false' }}"
+                wire:click="setListTab('imported')"
+            >
+                Imported
+                <span class="vio-list-tab-count">{{ $tabCounts['imported'] }}</span>
+            </button>
+        </div>
+    </div>
+
     <div class="mb-4 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div class="block min-w-[16rem] flex-1 text-sm">
             <span class="text-xs font-semibold uppercase tracking-wide text-slate-500">Import file</span>
@@ -157,247 +232,128 @@
                 </div>
             </div>
         </div>
-        <div class="block min-w-[14rem] text-sm">
-            <span class="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</span>
-            <div
-                class="vio-ms mt-1.5"
-                wire:key="status-filter-{{ md5(json_encode($statusFilterValues)) }}"
-                x-data="vioMultiSelect({
-                    options: {{ $statusOptionsJson }},
-                    selected: @js($statusFilterValues),
-                    placeholder: {{ \Illuminate\Support\Js::from($showImported ? 'All statuses' : 'Any unimported') }},
-                    onChange(values) { $wire.set('statusFilters', values) }
-                })"
-                @click.outside="open = false"
-            >
-                <button type="button" class="vio-ms-control" @click="open = !open; if (open) $nextTick(() => $refs.q.focus())">
-                    <template x-if="selected.length === 0">
-                        <span class="vio-ms-placeholder" x-text="placeholder"></span>
-                    </template>
-                    <template x-for="val in selected" :key="val">
-                        <span class="vio-ms-chip">
-                            <span x-text="labelFor(val)"></span>
-                            <button type="button" class="vio-ms-chip-x" @click.stop="toggle(val)">×</button>
-                        </span>
-                    </template>
-                    <span class="vio-ms-caret">▾</span>
-                </button>
-                <div class="vio-ms-panel" x-show="open" x-cloak>
-                    <input type="search" class="vio-ms-search" x-ref="q" x-model="query" placeholder="Search…" @keydown.escape.stop="open = false" />
-                    <ul class="vio-ms-list">
-                        <template x-for="opt in filtered" :key="opt.value">
-                            <li>
-                                <button type="button" class="vio-ms-option" :class="{ 'is-on': selected.includes(opt.value) }" @click="toggle(opt.value)">
-                                    <span x-text="opt.label"></span>
-                                    <span class="vio-ms-check" x-show="selected.includes(opt.value)">✓</span>
-                                </button>
-                            </li>
+        @if ($isAwaitingTab)
+            <div class="block min-w-[14rem] text-sm">
+                <span class="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</span>
+                <div
+                    class="vio-ms mt-1.5"
+                    wire:key="status-filter-{{ md5(json_encode($statusFilterValues)) }}"
+                    x-data="vioMultiSelect({
+                        options: {{ $statusOptionsJson }},
+                        selected: @js($statusFilterValues),
+                        placeholder: 'Any status',
+                        onChange(values) { $wire.set('statusFilters', values) }
+                    })"
+                    @click.outside="open = false"
+                >
+                    <button type="button" class="vio-ms-control" @click="open = !open; if (open) $nextTick(() => $refs.q.focus())">
+                        <template x-if="selected.length === 0">
+                            <span class="vio-ms-placeholder" x-text="placeholder"></span>
                         </template>
-                        <li x-show="filtered.length === 0" class="vio-ms-empty">No matches</li>
-                    </ul>
+                        <template x-for="val in selected" :key="val">
+                            <span class="vio-ms-chip">
+                                <span x-text="labelFor(val)"></span>
+                                <button type="button" class="vio-ms-chip-x" @click.stop="toggle(val)">×</button>
+                            </span>
+                        </template>
+                        <span class="vio-ms-caret">▾</span>
+                    </button>
+                    <div class="vio-ms-panel" x-show="open" x-cloak>
+                        <input type="search" class="vio-ms-search" x-ref="q" x-model="query" placeholder="Search…" @keydown.escape.stop="open = false" />
+                        <ul class="vio-ms-list">
+                            <template x-for="opt in filtered" :key="opt.value">
+                                <li>
+                                    <button type="button" class="vio-ms-option" :class="{ 'is-on': selected.includes(opt.value) }" @click="toggle(opt.value)">
+                                        <span x-text="opt.label"></span>
+                                        <span class="vio-ms-check" x-show="selected.includes(opt.value)">✓</span>
+                                    </button>
+                                </li>
+                            </template>
+                            <li x-show="filtered.length === 0" class="vio-ms-empty">No matches</li>
+                        </ul>
+                    </div>
                 </div>
             </div>
-        </div>
+        @endif
         @if ($filtersActive)
             <x-filament::button size="sm" color="gray" wire:click="clearFilters">Clear filters</x-filament::button>
         @endif
         <div class="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 pb-1 text-xs text-slate-500">
             <span>
                 Showing <strong class="text-slate-800">{{ count($this->logs) }}</strong>
-                @unless ($showImported)
-                    <span class="text-slate-400">· unimported only</span>
-                @else
-                    <span class="text-slate-400">· all</span>
-                @endunless
+                <span class="text-slate-400">· {{ $isAwaitingTab ? 'awaiting' : 'imported' }}</span>
             </span>
-            @if ($showImported)
-                <button
-                    type="button"
-                    class="font-semibold text-sky-700 underline decoration-sky-300 underline-offset-2 hover:text-sky-900"
-                    wire:click="showUnimportedOnly"
-                >Only unimported</button>
-            @else
-                <button
-                    type="button"
-                    class="font-semibold text-sky-700 underline decoration-sky-300 underline-offset-2 hover:text-sky-900"
-                    wire:click="showAllFines"
-                >Show all</button>
-            @endif
         </div>
     </div>
 
     @if (count($this->logs) === 0)
         <p class="text-sm text-gray-500">
-            Nothing here yet. On <strong>New fines</strong> use Fetch + Find driver first.
+            @if ($isAwaitingTab)
+                Nothing awaiting import.
+                @if ($filtersActive)
+                    Try clearing filters, or check the <button type="button" class="font-semibold text-sky-700 underline decoration-sky-300 underline-offset-2" wire:click="setListTab('imported')">Imported</button> tab.
+                @else
+                    On <strong>Read emails</strong> use Fetch + Find driver first.
+                @endif
+            @else
+                No imported fines yet.
+                After <strong>Start import</strong>, confirm on <strong>Imported</strong> with Update Wheelsys status.
+                @if ($filtersActive)
+                    Or clear the Import file filter.
+                @endif
+            @endif
         </p>
     @else
         <div style="margin-bottom: 5.5rem;">
-            @foreach ($this->logGroups as $group)
-                @php
-                    $groupKey = (string) $group['key'];
-                    $isOpen = $this->isBatchOpen($groupKey);
-                    $groupLogs = $group['logs'];
-                @endphp
-                <div
-                    wire:key="acc-{{ $groupKey }}"
-                    @class(['vio-acc', 'vio-acc-new' => ! empty($group['is_new']), 'vio-acc-open' => $isOpen])
-                >
-                    <button
-                        type="button"
-                        class="vio-acc-head"
-                        wire:click="toggleBatch(@js($groupKey))"
+            @if (! $isAwaitingTab)
+                @foreach ($this->logDayGroups as $day)
+                    @php
+                        $dayKey = (string) $day['key'];
+                        $dayOpen = $this->isBatchOpen($dayKey);
+                    @endphp
+                    <div
+                        wire:key="acc-{{ $dayKey }}"
+                        @class(['vio-acc-day', 'vio-acc-open' => $dayOpen])
                     >
-                        <svg class="vio-acc-chevron" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                            <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z" clip-rule="evenodd" />
-                        </svg>
-                        <div class="min-w-0">
-                            <div class="vio-acc-title truncate">{{ $group['title'] }}</div>
-                            @if (! empty($group['subtitle']))
-                                <div class="vio-acc-sub truncate">{{ $group['subtitle'] }}</div>
-                            @endif
-                        </div>
-                        @if (! empty($group['import_label']))
-                            <span class="vio-acc-status vio-acc-status-{{ $group['import_status'] ?? 'not_imported' }}">
-                                {{ $group['import_label'] }}
-                            </span>
-                        @endif
-                        <span class="vio-acc-count">{{ count($groupLogs) }}</span>
-                    </button>
-
-                    @if ($isOpen)
-                        <div class="vio-acc-body">
-                            @php
-                                $selectableInGroup = 0;
-                                foreach ($groupLogs as $groupLog) {
-                                    if ($this->rowIsSelectable($groupLog)) {
-                                        $selectableInGroup++;
-                                    }
-                                }
-                            @endphp
-                            <div class="vio-acc-actions">
-                                @if (! empty($group['is_new']))
-                                    {{-- Native button: Filament <x-filament::button> breaks wire:click with @js / nested quotes. --}}
-                                    @if ($selectableInGroup > 0)
-                                        <button
-                                            type="button"
-                                            wire:click="selectGroup('{{ $groupKey }}')"
-                                            class="inline-flex items-center justify-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm"
-                                            style="background:#16a34a; border:0; cursor:pointer;"
-                                        >
-                                            Select all ready
-                                        </button>
-                                    @endif
-                                @else
-                                    @if (! empty($group['sharepoint_url']))
-                                        <x-filament::button
-                                            tag="a"
-                                            size="xs"
-                                            color="gray"
-                                            :href="$group['sharepoint_url']"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                        >
-                                            Open file
-                                        </x-filament::button>
-                                    @endif
-                                    @if ($selectableInGroup > 0)
-                                        <button
-                                            type="button"
-                                            wire:click="selectGroup('{{ $groupKey }}')"
-                                            class="inline-flex items-center justify-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200"
-                                            style="background:#fff; cursor:pointer;"
-                                        >
-                                            Select ready in file
-                                        </button>
-                                    @endif
-                                @endif
+                        <button
+                            type="button"
+                            class="vio-acc-head"
+                            wire:click="toggleBatch(@js($dayKey))"
+                        >
+                            <svg class="vio-acc-chevron" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z" clip-rule="evenodd" />
+                            </svg>
+                            <div class="min-w-0">
+                                <div class="vio-acc-title truncate">{{ $day['title'] }}</div>
+                                <div class="vio-acc-sub truncate">{{ $day['subtitle'] }}</div>
                             </div>
-
-                            @if ($groupLogs === [])
-                                <p class="text-sm text-slate-500" style="margin: 0; padding: 16px;">No fines in this group.</p>
-                            @else
-                                <div class="overflow-x-auto">
-                                    <table class="vio-fines-table w-full min-w-[900px] text-left">
-                                        <thead>
-                                            <tr>
-                                                <th style="width: 2.5rem;"></th>
-                                                <th>Received</th>
-                                                <th>Vehicle</th>
-                                                <th>Driver</th>
-                                                <th>Reference</th>
-                                                <th>Authority</th>
-                                                <th>Informavimas</th>
-                                                <th>Status</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            @foreach ($groupLogs as $log)
-                                                @php
-                                                    $selectable = $this->rowIsSelectable($log);
-                                                    $status = $this->rowStatusLabel($log);
-                                                @endphp
-                                                <tr
-                                                    wire:key="import-{{ $log->id }}"
-                                                    @class(['vio-row-inactive' => ! $selectable])
-                                                >
-                                                    <td>
-                                                        <input
-                                                            type="checkbox"
-                                                            value="{{ $log->id }}"
-                                                            wire:model.live="selectedIds"
-                                                            class="rounded border-slate-300"
-                                                            @disabled(! $selectable && $log->wheels_import_status === \App\Models\FineProcessLog::WHEELS_IMPORT_IMPORTED)
-                                                        />
-                                                    </td>
-                                                    <td style="min-width: 8rem;">
-                                                        <div style="font-size: 11px; color: #64748b; font-variant-numeric: tabular-nums;">
-                                                            {{ optional($log->received_at)->timezone(config('app.timezone'))?->format('Y-m-d H:i') ?? '—' }}
-                                                        </div>
-                                                    </td>
-                                                    <td>
-                                                        <div style="font-weight: 700; letter-spacing: .02em;">{{ $log->vehicle ?: '—' }}</div>
-                                                        @if ($log->ticket_date)
-                                                            <div style="margin-top: 2px; font-size: 11px; color: #64748b;">
-                                                                {{ $log->ticket_date->format('Y-m-d') }}
-                                                                @if ($log->ticket_time) {{ $log->ticket_time }} @endif
-                                                            </div>
-                                                        @endif
-                                                    </td>
-                                                    <td>{{ $log->driver_name ?: '—' }}</td>
-                                                    <td>{{ $log->reference ?: '—' }}</td>
-                                                    <td>
-                                                        @if ($log->authority_name)
-                                                            <span class="vio-chip vio-chip-ok">{{ $log->authority_name }}</span>
-                                                        @else
-                                                            <span style="color: #cbd5e1;">—</span>
-                                                        @endif
-                                                    </td>
-                                                    <td>
-                                                        @include('filament.partials.informavimo-badge', [
-                                                            'deadline' => \App\Support\InformavimoTerminas::forLog($log),
-                                                        ])
-                                                    </td>
-                                                    <td>
-                                                        @if ($status === 'Ready')
-                                                            <span class="vio-chip vio-chip-slate">Ready</span>
-                                                        @elseif ($status === 'In Wheels')
-                                                            <span class="vio-chip vio-chip-ok">In Wheels</span>
-                                                        @elseif ($status === 'Missing in Wheels')
-                                                            <span class="vio-chip vio-chip-warn">Missing</span>
-                                                        @else
-                                                            <span class="vio-chip vio-chip-sky">In import file</span>
-                                                        @endif
-                                                    </td>
-                                                </tr>
-                                            @endforeach
-                                        </tbody>
-                                    </table>
-                                </div>
+                            @if (! empty($day['imported_at_label']))
+                                <span class="vio-acc-imported-when" title="Imported">{{ $day['imported_at_label'] }}</span>
                             @endif
-                        </div>
-                    @endif
-                </div>
-            @endforeach
+                            <span class="vio-acc-status vio-acc-status-imported">Imported</span>
+                            <span class="vio-acc-count">{{ $day['fine_count'] }}</span>
+                        </button>
+
+                        @if ($dayOpen)
+                            <div class="vio-acc-day-body">
+                                @foreach ($day['files'] as $group)
+                                    @include('filament.pages.partials.wheels-import-file-group', [
+                                        'group' => $group,
+                                        'nested' => true,
+                                    ])
+                                @endforeach
+                            </div>
+                        @endif
+                    </div>
+                @endforeach
+            @else
+                @foreach ($this->logGroups as $group)
+                    @include('filament.pages.partials.wheels-import-file-group', [
+                        'group' => $group,
+                        'nested' => false,
+                    ])
+                @endforeach
+            @endif
         </div>
 
         <div class="vio-footer-bar fixed inset-x-0 bottom-0">
@@ -406,29 +362,16 @@
                     Selected <strong class="text-slate-800">{{ count($selectedIds) }}</strong>
                 </p>
                 <x-filament::button size="sm" color="gray" wire:click="toggleSelectAll">All / None</x-filament::button>
-                @if (count($selectedIds) > 0)
-                    <x-filament::button
-                        size="sm"
-                        color="success"
-                        wire:click="generateImportFile"
-                        wire:loading.attr="disabled"
-                        wire:target="generateImportFile"
-                    >
-                        <span wire:loading.remove wire:target="generateImportFile">Generate import file</span>
-                        <span wire:loading wire:target="generateImportFile">Generating…</span>
-                    </x-filament::button>
-                @endif
                 <span class="hidden h-5 w-px bg-slate-200 sm:block"></span>
-                <x-filament::button size="sm" color="primary" wire:click="startImport">Start import</x-filament::button>
                 <x-filament::button
                     size="sm"
-                    color="warning"
-                    wire:click="verifyInWheelsys"
+                    color="success"
+                    wire:click="startImport"
                     wire:loading.attr="disabled"
-                    wire:target="verifyInWheelsys"
+                    wire:target="startImport"
                 >
-                    <span wire:loading.remove wire:target="verifyInWheelsys">Update Wheelsys status</span>
-                    <span wire:loading wire:target="verifyInWheelsys">Updating…</span>
+                    <span wire:loading.remove wire:target="startImport">Start import</span>
+                    <span wire:loading wire:target="startImport">Preparing…</span>
                 </x-filament::button>
             </div>
         </div>

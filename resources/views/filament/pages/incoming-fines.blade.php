@@ -293,7 +293,7 @@
         <div class="vio-hero-top">
             <div>
                 <p class="vio-hero-kicker">Mailbox</p>
-                <h2 class="vio-hero-title">New fines</h2>
+                <h2 class="vio-hero-title">Read emails</h2>
             </div>
             <div class="vio-mailbox-pill" title="Connected mailbox">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" width="16" height="16" aria-hidden="true">
@@ -308,14 +308,14 @@
             <div class="vio-step"><span class="vio-step-num">1</span><span><strong>Fetch</strong> inbox</span></div>
             <div class="vio-step"><span class="vio-step-num">2</span><span>Select rows</span></div>
             <div class="vio-step"><span class="vio-step-num">3</span><span><strong>Find driver</strong> → VIO</span></div>
-            <div class="vio-step"><span class="vio-step-num">4</span><span><strong>Wheelsys import</strong></span></div>
+            <div class="vio-step"><span class="vio-step-num">4</span><span><strong>To Wheelsys</strong></span></div>
         </div>
 
         <p class="vio-hero-note">
             Re-fetch marks rows already saved as <strong style="color:#fff">Already have</strong>.
             Use <strong style="color:#fff">Details</strong> for rental fixes or ANR assist.
             Continue in
-            <a href="{{ \App\Filament\Pages\WheelsExcelExport::getUrl() }}">Wheelsys import</a>.
+            <a href="{{ \App\Filament\Pages\WheelsExcelExport::getUrl() }}">To Wheelsys</a>.
         </p>
     </div>
 
@@ -581,7 +581,11 @@
                                 <td>
                                     <div class="flex flex-wrap gap-1">
                                         @if (! empty($row['excel_exported']))
-                                            <span class="vio-chip vio-chip-sky">Already have · Prepared</span>
+                                            <a
+                                                href="{{ \App\Filament\Pages\WheelsExcelExport::getUrl() }}"
+                                                class="vio-chip vio-chip-sky"
+                                                title="Excel already prepared — continue on To Wheelsys"
+                                            >Already have · Prepared → import</a>
                                         @elseif (! empty($row['in_excel_queue']))
                                             <span class="vio-chip vio-chip-indigo">Already have · Ready</span>
                                         @elseif (! empty($row['in_vio']) && $lookup === 'found')
@@ -1109,10 +1113,21 @@
                     @endif
                 </div>
 
+                @php
+                    $previewWheelsImported = false;
+                    if ($this->processLogId) {
+                        $previewWheelsImported = \App\Models\FineProcessLog::query()
+                            ->whereKey($this->processLogId)
+                            ->where('wheels_import_status', \App\Models\FineProcessLog::WHEELS_IMPORT_IMPORTED)
+                            ->exists();
+                    }
+                @endphp
                 <div class="flex flex-wrap justify-end gap-2" style="padding: 20px 28px;">
                     <x-filament::button color="gray" wire:click="closePreview">Close</x-filament::button>
-                    <x-filament::button color="gray" wire:click="createInWheelsys">Create in Wheels</x-filament::button>
-                    <x-filament::button color="gray" wire:click="markWheelsCreated">Mark Wheels done</x-filament::button>
+                    @unless ($previewWheelsImported)
+                        <x-filament::button color="gray" wire:click="createInWheelsys">Create in Wheels</x-filament::button>
+                        <x-filament::button color="gray" wire:click="markWheelsCreated">Mark Wheels done</x-filament::button>
+                    @endunless
                     @if (($previewDraft['reply_channel'] ?? '') === 'epaslaugos')
                         <x-filament::button color="warning" wire:click="markEpaslaugosDone">
                             Mark ePaslaugos done

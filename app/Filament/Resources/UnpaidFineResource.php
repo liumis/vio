@@ -35,6 +35,12 @@ class UnpaidFineResource extends Resource
 
     protected static ?int $navigationSort = 50;
 
+    /** MVP: hide from nav — Wheels import + authority inform first; Unpaid is a later phase. */
+    public static function shouldRegisterNavigation(): bool
+    {
+        return false;
+    }
+
     public static function form(Form $form): Form
     {
         return $form->schema([]);

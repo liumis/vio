@@ -122,6 +122,17 @@ final class IncomingFineMailScanner
         'thank you for your payment',
         'we have received your payment',
         'receipt of payment',
+        // Payment deadline reminders (Julianus Inkaso etc.) — not new fine notices
+        'mokejimo laikas',
+        'mokejimo terminas',
+        'priminimas apie mokejim',
+        'priminimas sumoketi',
+        'primename apie mokejim',
+        'payment reminder',
+        'payment due',
+        'time to pay',
+        'pay by',
+
         // Annulment / cancellation replies (Unipark etc.) — no plate / no Wheelsys work
         'sekmingai anuliavome',
         'pranesima anuliav',
@@ -239,6 +250,16 @@ final class IncomingFineMailScanner
 
             // Legal Balance: skip debt reminders only, not every letter from that domain.
             if ($this->isLegalBalanceDebtReminder(
+                (string) ($message['from_email'] ?? ''),
+                (string) ($message['subject'] ?? ''),
+                (string) ($message['preview'] ?? ''),
+                $authority
+            )) {
+                continue;
+            }
+
+            // Julianus Inkaso: "Mokėjimo laikas" and similar payment reminders — not new fines.
+            if ($this->isJulianusPaymentReminder(
                 (string) ($message['from_email'] ?? ''),
                 (string) ($message['subject'] ?? ''),
                 (string) ($message['preview'] ?? ''),
@@ -384,6 +405,51 @@ final class IncomingFineMailScanner
             if ($needle !== '' && str_contains($folded, $needle)) {
                 return true;
             }
+        }
+
+        return false;
+    }
+
+    /**
+     * Julianus payment-deadline reminders (subject often exactly "Mokėjimo laikas").
+     *
+     * @param  \App\Models\Authority|null  $authority
+     */
+    private function isJulianusPaymentReminder(
+        string $fromEmail,
+        string $subject,
+        string $preview,
+        $authority
+    ): bool {
+        $domain = AuthorityMatcher::domainOf($fromEmail);
+        $isJulianus = $domain === 'julianus.lt'
+            || str_ends_with($domain, '.julianus.lt')
+            || ($authority !== null && (
+                str_contains(strtolower((string) ($authority->email_pattern ?? '')), 'julianus')
+                || str_contains(mb_strtolower((string) ($authority->name ?? ''), 'UTF-8'), 'julianus')
+            ));
+
+        if (! $isJulianus) {
+            return false;
+        }
+
+        $fold = static function (string $value): string {
+            return strtr(mb_strtolower(trim($value), 'UTF-8'), [
+                'ą' => 'a', 'č' => 'c', 'ę' => 'e', 'ė' => 'e', 'į' => 'i',
+                'š' => 's', 'ų' => 'u', 'ū' => 'u', 'ž' => 'z',
+            ]);
+        };
+
+        $subjectFolded = $fold($subject);
+        $haystack = $fold($subject."\n".$preview);
+
+        // Exact / common Julianus reminder subjects.
+        if ($subjectFolded === 'mokejimo laikas'
+            || str_starts_with($subjectFolded, 'mokejimo laikas')
+            || str_contains($haystack, 'mokejimo laikas')
+            || str_contains($haystack, 'priminimas apie mokejim')
+            || str_contains($haystack, 'payment reminder')) {
+            return true;
         }
 
         return false;

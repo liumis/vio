@@ -44,6 +44,7 @@ class EmailSettings extends Page implements HasForms
             'from_email' => $settings->from_email ?: config('mail.from.address'),
             'reply_to' => $settings->reply_to ?: env('MAIL_REPLY_TO_ADDRESS'),
             'subject' => $settings->subject,
+            'mail_signature' => $settings->mail_signature ?: '',
             'inbox_mailbox' => $settings->inbox_mailbox ?: 'administration@greenlease.lt',
             'o365_enabled' => (bool) ($settings->o365_enabled ?: config('services.microsoft_o365.enabled', false)),
             'o365_tenant_id' => $settings->o365_tenant_id ?: config('services.microsoft_o365.tenant_id'),
@@ -100,14 +101,20 @@ class EmailSettings extends Page implements HasForms
                             ->label('From email (Graph send as)')
                             ->email()
                             ->maxLength(255)
-                            ->helperText('Mailbox used for Graph sendMail, e.g. a licensed user that can send.'),
+                            ->helperText('Must be a real Microsoft 365 mailbox UPN in this tenant (usually same as Inbox), e.g. administration@greenlease.lt — not a vanity .com alias.'),
                         Forms\Components\TextInput::make('reply_to')
                             ->label('Reply-To')
                             ->email()
-                            ->maxLength(255),
+                            ->maxLength(255)
+                            ->helperText('Prefer the same mailbox as From / Inbox unless replies should go elsewhere.'),
                         Forms\Components\TextInput::make('subject')
                             ->label('Default subject')
                             ->maxLength(255),
+                        Forms\Components\Textarea::make('mail_signature')
+                            ->label('Default email signature')
+                            ->rows(6)
+                            ->columnSpanFull()
+                            ->helperText('Appended to authority reply emails (Preview / Send). Use plain text; line breaks are kept.'),
                     ])
                     ->columns(2),
 
@@ -146,7 +153,7 @@ class EmailSettings extends Page implements HasForms
                     ->columns(2),
 
                 Forms\Components\Section::make('SharePoint (fine documents)')
-                    ->description('Target folder for uploaded fine PDFs. Uses the same Graph app credentials.')
+                    ->description('Base folder for fine PDFs. VIO creates {YYYY}/{Reference}[__{RNT}] under it automatically.')
                     ->schema([
                         Forms\Components\TextInput::make('sharepoint_site_url')
                             ->label('Site URL')
@@ -155,7 +162,7 @@ class EmailSettings extends Page implements HasForms
                         Forms\Components\TextInput::make('sharepoint_folder_path')
                             ->label('Folder path (in default Documents library)')
                             ->maxLength(500)
-                            ->helperText('e.g. Lithuania/Administration/Policijos administravimas'),
+                            ->helperText('Base only, e.g. Lithuania/Administration/Policijos administravimas → files land in …/2026/26316319149__RNT-76970/{Driver} {Reference}.pdf'),
                     ]),
 
                 Forms\Components\Section::make('Wheelsys')
@@ -304,6 +311,9 @@ class EmailSettings extends Page implements HasForms
             'from_email' => $state['from_email'] ?? null,
             'reply_to' => $state['reply_to'] ?? null,
             'subject' => $state['subject'] ?? null,
+            'mail_signature' => isset($state['mail_signature'])
+                ? trim((string) $state['mail_signature'])
+                : null,
             'inbox_mailbox' => $state['inbox_mailbox'] ?? null,
             'o365_enabled' => (bool) ($state['o365_enabled'] ?? false),
             'o365_tenant_id' => $state['o365_tenant_id'] ?? null,
