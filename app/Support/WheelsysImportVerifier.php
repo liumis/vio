@@ -191,6 +191,7 @@ class WheelsysImportVerifier
                 'wheels_imported_at' => $confirmedAt,
                 'wheels_imported_by' => $userId,
             ])->save();
+            $this->ensurePendingMailboxFolder($log);
             $verified++;
         }
 
@@ -274,10 +275,23 @@ class WheelsysImportVerifier
                 'wheels_imported_at' => now(),
                 'wheels_imported_by' => $userId,
             ])->save();
+            $this->ensurePendingMailboxFolder($log);
             $verified++;
         }
 
         return compact('verified', 'missing', 'skipped', 'errors');
+    }
+
+    /**
+     * Inbox → "VIO pending" once Wheelsys import is confirmed (no-op if already moved / finished).
+     */
+    private function ensurePendingMailboxFolder(FineProcessLog $log): void
+    {
+        try {
+            app(IncomingFineMailboxFolders::class)->moveToPending($log->fresh());
+        } catch (Throwable) {
+            // Non-fatal — import status already saved.
+        }
     }
 
     /**

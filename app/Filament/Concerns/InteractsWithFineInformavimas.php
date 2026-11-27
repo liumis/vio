@@ -526,6 +526,12 @@ trait InteractsWithFineInformavimas
         }
         $log->fill($fill)->save();
 
+        try {
+            app(\App\Support\IncomingFineMailboxFolders::class)->moveToPending($log->fresh());
+        } catch (Throwable) {
+            // Non-fatal.
+        }
+
         Notification::make()->success()->title('Wheels create marked done')->send();
     }
 

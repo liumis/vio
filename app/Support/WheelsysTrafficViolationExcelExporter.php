@@ -174,7 +174,8 @@ final class WheelsysTrafficViolationExcelExporter
                 'workflow' => $workflow,
             ])->save();
 
-            // Inbox → "VIO pending" once the fine is in the Wheelsys import Excel.
+            // Inbox → "VIO pending" once the fine is in the Wheelsys import Excel
+            // (authority reply / ePaslaugos later moves it to "VIO Processed").
             try {
                 app(IncomingFineMailboxFolders::class)->moveToPending($log->fresh());
             } catch (Throwable) {

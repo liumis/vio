@@ -1642,6 +1642,14 @@ class IncomingFines extends Page implements HasForms
                     'wheels_exported_by' => auth()->id(),
                 ])->save();
             }
+
+            if ($log) {
+                try {
+                    app(IncomingFineMailboxFolders::class)->moveToPending($log->fresh());
+                } catch (Throwable) {
+                    // Non-fatal.
+                }
+            }
         }
 
         Notification::make()->success()->title('Wheels create marked done')->send();

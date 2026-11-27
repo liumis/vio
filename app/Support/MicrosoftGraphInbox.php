@@ -57,7 +57,7 @@ final class MicrosoftGraphInbox
     }
 
     /**
-     * Inbox-only fine mailbox listing (handled mail is moved to "VIO pending" / "VIO processed").
+     * Inbox-only fine mailbox listing (handled mail is moved to "VIO pending" / "VIO Processed").
      *
      * @return list<array{
      *     id: string,

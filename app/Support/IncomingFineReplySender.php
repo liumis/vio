@@ -101,7 +101,7 @@ final class IncomingFineReplySender
             'processed_by' => $log->processed_by ?? auth()->id(),
         ])->save();
 
-        // Authority reply sent → move original notice to "VIO processed".
+        // Authority reply sent → move original notice to "VIO Processed".
         try {
             app(IncomingFineMailboxFolders::class)->moveToProcessed($log->fresh());
         } catch (\Throwable) {
