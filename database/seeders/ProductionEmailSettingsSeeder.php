@@ -18,8 +18,9 @@ class ProductionEmailSettingsSeeder extends Seeder
 
         $payload = [
             'from_name' => (string) config('mail.from.name', 'Sit&Go cars rent'),
-            'from_email' => (string) config('mail.from.address', 'administration@greenlease.com'),
-            'reply_to' => (string) config('vio.mail_reply_to', 'administration@greenlease.com'),
+            // Real M365 mailbox is @greenlease.lt — @greenlease.com is not a Graph user.
+            'from_email' => (string) config('mail.from.address', 'administration@greenlease.lt'),
+            'reply_to' => (string) config('vio.mail_reply_to', 'administration@greenlease.lt'),
             'subject' => (string) config('vio.email_subject', 'Violation notification'),
             'inbox_mailbox' => (string) config('vio.inbox_mailbox', 'administration@greenlease.lt'),
             'o365_enabled' => (bool) config('services.microsoft_o365.enabled', true),

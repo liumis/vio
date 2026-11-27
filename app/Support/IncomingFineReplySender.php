@@ -295,30 +295,45 @@ final class IncomingFineReplySender
      *
      * @param  array<string, mixed>  $draft
      * @return array{
-     *     notice: list<array{name:string,bytes:int}>,
-     *     contracts: list<array{name:string,bytes:int}>,
+     *     notice: list<array{name:string,bytes:int,url:?string}>,
+     *     contracts: list<array{name:string,bytes:int,url:?string}>,
      *     requires_contract: bool
      * }
      */
     public function previewAttachments(array $draft, FineProcessLog $log): array
     {
+        $noticeUrl = $log->documentSharePointUrl();
         $notice = [];
         foreach ($this->originalNoticeAttachments($log) as $file) {
             $notice[] = [
                 'name' => $file['name'],
                 'bytes' => (int) Storage::disk('local')->size($file['path']),
+                'url' => $noticeUrl,
+            ];
+        }
+        if ($notice === [] && filled($noticeUrl)) {
+            $notice[] = [
+                'name' => basename(urldecode((string) (parse_url($noticeUrl, PHP_URL_PATH) ?: 'notice.pdf'))),
+                'bytes' => 0,
+                'url' => $noticeUrl,
             ];
         }
 
         $contracts = [];
         $requires = $this->draftRequiresContract($draft, $log);
-        if ($requires) {
+        if ($requires && filled($log->rental_id)) {
+            // Must-attach authorities: resolve real mail attachments (downloads from Wheelsys).
             foreach ($this->rentalContractAttachments($log) as $file) {
                 $contracts[] = [
                     'name' => $file['name'],
                     'bytes' => (int) Storage::disk('local')->size($file['path']),
+                    'url' => null,
                 ];
             }
+            // Prefer SharePoint URLs when already archived (open/download in browser).
+            $contracts = $this->mergeSharePointContractUrls($log, $contracts);
+        } elseif (filled($log->rental_id)) {
+            $contracts = $this->mergeSharePointContractUrls($log, []);
         }
 
         return [
@@ -326,5 +341,83 @@ final class IncomingFineReplySender
             'contracts' => $contracts,
             'requires_contract' => $requires,
         ];
+    }
+
+    /**
+     * @param  list<array{name:string,bytes:int,url:?string}>  $contracts
+     * @return list<array{name:string,bytes:int,url:?string}>
+     */
+    private function mergeSharePointContractUrls(FineProcessLog $log, array $contracts): array
+    {
+        $workflow = is_array($log->workflow) ? $log->workflow : [];
+        $stored = is_array($workflow['sharepoint_rnt_documents'] ?? null)
+            ? $workflow['sharepoint_rnt_documents']
+            : [];
+        $storedNames = is_array($stored['files'] ?? null) ? $stored['files'] : [];
+        $storedUrls = is_array($stored['urls'] ?? null) ? $stored['urls'] : [];
+
+        /** @var array<string, string> $urlByName */
+        $urlByName = [];
+        $count = max(count($storedNames), count($storedUrls));
+        for ($i = 0; $i < $count; $i++) {
+            $name = isset($storedNames[$i]) && is_string($storedNames[$i]) ? trim($storedNames[$i]) : '';
+            $url = isset($storedUrls[$i]) && is_string($storedUrls[$i]) ? trim($storedUrls[$i]) : '';
+            if ($name === '' && $url !== '') {
+                $name = basename(urldecode((string) (parse_url($url, PHP_URL_PATH) ?: '')));
+            }
+            if ($name === '' || $url === '') {
+                continue;
+            }
+            if (! str_ends_with(strtolower($name), '.pdf')) {
+                continue;
+            }
+            $urlByName[strtolower($name)] = $url;
+            $urlByName[strtolower(basename($name))] = $url;
+        }
+
+        // Also index by primary PDF URL list (signed first).
+        foreach ($log->rntContractPdfSharePointUrls() as $url) {
+            $base = strtolower(basename(urldecode((string) (parse_url($url, PHP_URL_PATH) ?: ''))));
+            if ($base !== '') {
+                $urlByName[$base] = $url;
+            }
+        }
+
+        if ($contracts === []) {
+            foreach ($urlByName as $name => $url) {
+                // urlByName has duplicates (full + basename) — keep unique URLs.
+                $contracts[] = [
+                    'name' => basename(urldecode((string) (parse_url($url, PHP_URL_PATH) ?: $name))),
+                    'bytes' => 0,
+                    'url' => $url,
+                ];
+            }
+            // Dedupe by URL.
+            $seen = [];
+            $unique = [];
+            foreach ($contracts as $row) {
+                $key = (string) ($row['url'] ?? $row['name']);
+                if (isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
+                $unique[] = $row;
+            }
+
+            return $unique;
+        }
+
+        foreach ($contracts as &$row) {
+            if (filled($row['url'] ?? null)) {
+                continue;
+            }
+            $name = strtolower((string) ($row['name'] ?? ''));
+            $row['url'] = $urlByName[$name]
+                ?? $urlByName[basename($name)]
+                ?? null;
+        }
+        unset($row);
+
+        return $contracts;
     }
 }

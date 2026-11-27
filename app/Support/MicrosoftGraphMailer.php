@@ -37,6 +37,15 @@ class MicrosoftGraphMailer
             throw new RuntimeException('From email is required for Microsoft 365 sending.');
         }
 
+        // Graph /users/{id}/sendMail must use a real mailbox in the tenant.
+        // System "From" is often a public address (.com) while the mailbox is .lt.
+        $mailbox = trim((string) ($config['inbox_mailbox'] ?? ''));
+        if ($mailbox === '') {
+            $mailbox = $fromEmail;
+        }
+        $mailbox = $this->preferValidGreenleaseMailbox($mailbox, $fromEmail);
+        $fromHeader = $this->preferValidGreenleaseMailbox($fromEmail, $mailbox);
+
         $tokenResponse = Http::asForm()
             ->timeout(HttpTimeouts::short())
             ->post("https://login.microsoftonline.com/{$tenantId}/oauth2/v2.0/token", [
@@ -69,6 +78,14 @@ class MicrosoftGraphMailer
                 ],
             ],
         ];
+
+        if (strcasecmp($fromHeader, $mailbox) !== 0) {
+            $message['from'] = [
+                'emailAddress' => [
+                    'address' => $fromHeader,
+                ],
+            ];
+        }
 
         if ($replyTo !== null && trim($replyTo) !== '') {
             $message['replyTo'] = [[
@@ -112,14 +129,45 @@ class MicrosoftGraphMailer
 
         $sendResponse = Http::withToken($accessToken)
             ->timeout(HttpTimeouts::long())
-            ->post('https://graph.microsoft.com/v1.0/users/'.rawurlencode($fromEmail).'/sendMail', [
+            ->post('https://graph.microsoft.com/v1.0/users/'.rawurlencode($mailbox).'/sendMail', [
                 'message' => $message,
                 'saveToSentItems' => true,
             ]);
 
         if (! $sendResponse->successful()) {
-            throw new RuntimeException('Microsoft Graph send failed: '.$sendResponse->body());
+            $body = $sendResponse->body();
+            if (str_contains($body, 'ErrorInvalidUser')) {
+                throw new RuntimeException(
+                    'Microsoft Graph send failed: mailbox "'.$mailbox.'" is invalid in the tenant. '
+                    .'Set System settings → Inbox mailbox to the real M365 address (e.g. administration@greenlease.lt), '
+                    .'not a public From alias. Graph response: '.$body
+                );
+            }
+            throw new RuntimeException('Microsoft Graph send failed: '.$body);
         }
+    }
+
+    /**
+     * Prefer greenlease.lt mailbox when .com twin is used (Graph rejects unknown .com user).
+     */
+    private function preferValidGreenleaseMailbox(string $preferred, string $fallback): string
+    {
+        $preferred = trim($preferred);
+        $fallback = trim($fallback);
+        if ($preferred === '') {
+            return $fallback;
+        }
+
+        if (preg_match('/^(administration)@greenlease\.com$/i', $preferred, $m)) {
+            $lt = $m[1].'@greenlease.lt';
+            if ($fallback !== '' && strcasecmp($fallback, $lt) === 0) {
+                return $lt;
+            }
+
+            return $lt;
+        }
+
+        return $preferred;
     }
 
     /**

@@ -17,6 +17,9 @@
         $externalCompanyFilled = is_array($externalCompany)
             && ($externalCompany['status'] ?? '') === 'filled'
             && ($externalCompany['filled'] ?? []) !== [];
+        $hasRentalId = filled($wheelsysSelected['id'] ?? null)
+            || filled($wheelsysSelected['rental_id'] ?? null)
+            || filled($informuotiRentalId ?? null);
     @endphp
     <div
         class="fixed inset-0 flex items-start justify-center overflow-y-auto"
@@ -509,8 +512,9 @@
                         $attachNotice = is_array($attachPreview['notice'] ?? null) ? $attachPreview['notice'] : [];
                         $attachContracts = is_array($attachPreview['contracts'] ?? null) ? $attachPreview['contracts'] : [];
                         $attachError = trim((string) ($attachPreview['error'] ?? ''));
+                        $canFetchContract = $hasRentalId || $requiresContract;
                     @endphp
-                    @if ($requiresContract || $attachNotice !== [] || $attachContracts !== [] || $attachError !== '')
+                    @if ($requiresContract || $canFetchContract || $attachNotice !== [] || $attachContracts !== [] || $attachError !== '')
                         <div class="rounded-xl bg-amber-50 ring-1 ring-amber-200" style="padding: 14px; margin-top: 12px;">
                             <div class="flex flex-wrap items-center justify-between gap-2" style="margin: 0 0 8px;">
                                 <p class="text-xs font-semibold uppercase text-amber-900" style="margin: 0;">Attachments on send</p>
@@ -518,8 +522,14 @@
                                     <x-filament::button size="xs" color="gray" wire:click="refreshSendAttachmentPreview" wire:loading.attr="disabled">
                                         Retest attach
                                     </x-filament::button>
-                                    @if ($requiresContract)
-                                        <x-filament::button size="xs" color="warning" wire:click="fetchRntDocsForInformuoti" wire:loading.attr="disabled">
+                                    @if ($canFetchContract)
+                                        <x-filament::button
+                                            size="xs"
+                                            color="warning"
+                                            wire:click="fetchRntDocsForInformuoti"
+                                            wire:loading.attr="disabled"
+                                            title="{{ $requiresContract ? 'Required for this authority' : 'Optional — available for all authorities when rental is selected' }}"
+                                        >
                                             Fetch contract → SharePoint
                                         </x-filament::button>
                                     @endif
@@ -533,16 +543,46 @@
                                     @if ($attachNotice === [])
                                         <span style="color:#b91c1c;">none found</span>
                                     @else
-                                        {{ collect($attachNotice)->pluck('name')->implode(', ') }}
+                                        <span style="display:inline-flex;flex-wrap:wrap;gap:6px;margin-top:4px;">
+                                            @foreach ($attachNotice as $noticeFile)
+                                                @if (! empty($noticeFile['url']))
+                                                    <a
+                                                        href="{{ $noticeFile['url'] }}"
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        style="color:#0369a1;text-decoration:underline;font-weight:600;"
+                                                        title="Open on SharePoint"
+                                                    >{{ $noticeFile['name'] ?? 'notice.pdf' }}</a>
+                                                @else
+                                                    <span>{{ $noticeFile['name'] ?? 'notice.pdf' }}</span>
+                                                @endif
+                                            @endforeach
+                                        </span>
                                     @endif
                                 </div>
-                                <div style="margin-top:4px;"><strong>Contract (RNT):</strong>
-                                    @if (! $requiresContract)
-                                        <span style="color:#64748b;">not required</span>
-                                    @elseif ($attachContracts === [])
-                                        <span style="color:#b91c1c;">none — fetch / check rental attachments</span>
+                                <div style="margin-top:6px;"><strong>Contract (RNT)@if ($requiresContract) *@endif:</strong>
+                                    @if ($attachContracts !== [])
+                                        <span style="display:inline-flex;flex-wrap:wrap;gap:6px;margin-top:4px;">
+                                            @foreach ($attachContracts as $contractFile)
+                                                @if (! empty($contractFile['url']))
+                                                    <a
+                                                        href="{{ $contractFile['url'] }}"
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        style="color:#b45309;text-decoration:underline;font-weight:700;"
+                                                        title="Open on SharePoint"
+                                                    >{{ $contractFile['name'] ?? 'contract.pdf' }}</a>
+                                                @else
+                                                    <span>{{ $contractFile['name'] ?? 'contract.pdf' }}</span>
+                                                @endif
+                                            @endforeach
+                                        </span>
+                                    @elseif ($requiresContract)
+                                        <span style="color:#b91c1c;">must — fetch / check rental attachments</span>
+                                    @elseif ($canFetchContract)
+                                        <span style="color:#64748b;">optional — fetch if needed</span>
                                     @else
-                                        {{ collect($attachContracts)->pluck('name')->implode(', ') }}
+                                        <span style="color:#64748b;">pick rental to enable fetch</span>
                                     @endif
                                 </div>
                             </div>

@@ -268,8 +268,7 @@ class ListViolations extends ListRecords
                     'fine_count' => 0,
                     'to_send_count' => 0,
                     'not_imported_count' => 0,
-                    // Unknown (no import date) sorts above dated days within the same pending/done bucket.
-                    'sort' => $dayKey === 'unknown' ? '9999-12-31' : $dayKey,
+                    'sort' => $dayKey === 'unknown' ? '' : $dayKey,
                     'is_unknown' => $dayKey === 'unknown',
                 ];
             }
@@ -279,23 +278,23 @@ class ListViolations extends ListRecords
             $days[$dayKey]['not_imported_count'] += $notImported;
         }
 
-        // 1) Days with not-imported fines first
-        // 2) "No import date" above dated days
-        // 3) Then newest → oldest
+        // Explicit bucket: 0 = No import date, 1 = has not-imported, 2 = fully imported.
+        // Then newest date → oldest inside the bucket.
         uasort($days, static function (array $a, array $b): int {
-            $aPending = ((int) ($a['not_imported_count'] ?? 0)) > 0 ? 1 : 0;
-            $bPending = ((int) ($b['not_imported_count'] ?? 0)) > 0 ? 1 : 0;
-            if ($aPending !== $bPending) {
-                return $bPending <=> $aPending;
+            $bucket = static function (array $day): int {
+                if (! empty($day['is_unknown'])) {
+                    return 0;
+                }
+
+                return ((int) ($day['not_imported_count'] ?? 0)) > 0 ? 1 : 2;
+            };
+
+            $byBucket = $bucket($a) <=> $bucket($b);
+            if ($byBucket !== 0) {
+                return $byBucket;
             }
 
-            $aUnknown = ! empty($a['is_unknown']) ? 1 : 0;
-            $bUnknown = ! empty($b['is_unknown']) ? 1 : 0;
-            if ($aUnknown !== $bUnknown) {
-                return $bUnknown <=> $aUnknown;
-            }
-
-            return strcmp((string) $b['sort'], (string) $a['sort']);
+            return strcmp((string) ($b['sort'] ?? ''), (string) ($a['sort'] ?? ''));
         });
 
         $out = [];
@@ -598,9 +597,15 @@ class ListViolations extends ListRecords
             $wheelsAlreadyImported = $status === FineProcessLog::WHEELS_IMPORT_IMPORTED;
         }
 
+        $informuotiRentalId = null;
+        if ($this->informuotiLogId) {
+            $informuotiRentalId = FineProcessLog::query()->whereKey($this->informuotiLogId)->value('rental_id');
+        }
+
         return view('filament.resources.violation-resource.informuoti-modal', [
             'showInformuoti' => $this->showInformuoti,
             'informuotiLogId' => $this->informuotiLogId,
+            'informuotiRentalId' => $informuotiRentalId,
             'previewDraft' => $this->previewDraft,
             'previewMessage' => $this->previewMessage,
             'wheelsysResults' => $this->wheelsysResults,

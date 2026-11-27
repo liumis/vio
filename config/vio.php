@@ -26,7 +26,7 @@ return [
 
     'email_subject' => env('VIO_EMAIL_SUBJECT', 'Violation notification'),
 
-    'mail_reply_to' => env('MAIL_REPLY_TO_ADDRESS', 'administration@greenlease.com'),
+    'mail_reply_to' => env('MAIL_REPLY_TO_ADDRESS', 'administration@greenlease.lt'),
 
     'smtp_encryption' => env('MAIL_ENCRYPTION', 'tls'),
 

@@ -366,9 +366,26 @@
                                                                                 {{ \App\Models\FineProcessLog::rntContractButtonLabel($rntPdfUrl, $rntIdx, count($rntPdfUrls)) }}
                                                                             </x-filament::button>
                                                                         @endforeach
-                                                                    @elseif ($needsContract && filled($log->rental_id))
-                                                                        <x-filament::button size="xs" color="warning" wire:click="fetchRntDocs({{ (int) $log->id }})" wire:loading.attr="disabled">
+                                                                    @endif
+                                                                    @if (filled($log->rental_id) && $rntPdfUrls === [])
+                                                                        <x-filament::button
+                                                                            size="xs"
+                                                                            color="warning"
+                                                                            wire:click="fetchRntDocs({{ (int) $log->id }})"
+                                                                            wire:loading.attr="disabled"
+                                                                            title="{{ $needsContract ? 'Required for this authority' : 'Optional — save RNT PDFs to SharePoint' }}"
+                                                                        >
                                                                             Fetch contract
+                                                                        </x-filament::button>
+                                                                    @elseif (filled($log->rental_id) && $rntPdfUrls !== [])
+                                                                        <x-filament::button
+                                                                            size="xs"
+                                                                            color="gray"
+                                                                            wire:click="fetchRntDocs({{ (int) $log->id }})"
+                                                                            wire:loading.attr="disabled"
+                                                                            title="Re-fetch RNT attachments from Wheelsys"
+                                                                        >
+                                                                            Re-fetch
                                                                         </x-filament::button>
                                                                     @endif
                                                                     @if ($tvUrl)
