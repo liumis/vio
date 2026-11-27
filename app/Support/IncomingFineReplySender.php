@@ -33,6 +33,17 @@ final class IncomingFineReplySender
         $html = $builder->renderNeutralHtml($subject, $bodyText);
         $replyTo = trim((string) ($draft['reply_to'] ?? ''));
 
+        $includeKeys = null;
+        if (array_key_exists('attach_include_keys', $draft)) {
+            $includeKeys = [];
+            foreach ((array) $draft['attach_include_keys'] as $key) {
+                $key = trim((string) $key);
+                if ($key !== '') {
+                    $includeKeys[$key] = true;
+                }
+            }
+        }
+
         $attachments = [];
         $infoPdf = app(AuthorityInfoPdfGenerator::class)->generateIfRequired($draft, $log);
         if ($infoPdf !== null) {
@@ -44,14 +55,26 @@ final class IncomingFineReplySender
         }
 
         foreach ($this->originalNoticeAttachments($log) as $notice) {
+            if ($includeKeys !== null && ! isset($includeKeys[$this->attachmentSelectionKey('notice', $notice['name'])])) {
+                continue;
+            }
             $attachments[] = $notice;
         }
 
         $rntAttached = [];
         if ($log !== null && $this->draftRequiresContract($draft, $log)) {
-            foreach ($this->rentalContractAttachments($log) as $rnt) {
+            $rntFiles = $this->rentalContractAttachments($log);
+            foreach ($rntFiles as $rnt) {
+                if ($includeKeys !== null && ! isset($includeKeys[$this->attachmentSelectionKey('contract', $rnt['name'])])) {
+                    continue;
+                }
                 $attachments[] = $rnt;
                 $rntAttached[] = $rnt['name'];
+            }
+            if ($includeKeys !== null && $rntFiles !== [] && $rntAttached === []) {
+                throw new RuntimeException(
+                    'Contract (RNT) is required for this authority — keep at least one contract PDF selected.'
+                );
             }
         }
 
@@ -291,12 +314,20 @@ final class IncomingFineReplySender
     }
 
     /**
+     * Stable checkbox key for notice / contract file selection before send.
+     */
+    public function attachmentSelectionKey(string $kind, string $name): string
+    {
+        return $kind.':'.strtolower(basename(str_replace('\\', '/', $name)));
+    }
+
+    /**
      * Dry-run: resolve notice + RNT attachments that would be sent (no email).
      *
      * @param  array<string, mixed>  $draft
      * @return array{
-     *     notice: list<array{name:string,bytes:int,url:?string}>,
-     *     contracts: list<array{name:string,bytes:int,url:?string}>,
+     *     notice: list<array{key:string,name:string,bytes:int,url:?string}>,
+     *     contracts: list<array{key:string,name:string,bytes:int,url:?string}>,
      *     requires_contract: bool
      * }
      */
@@ -306,14 +337,17 @@ final class IncomingFineReplySender
         $notice = [];
         foreach ($this->originalNoticeAttachments($log) as $file) {
             $notice[] = [
+                'key' => $this->attachmentSelectionKey('notice', $file['name']),
                 'name' => $file['name'],
                 'bytes' => (int) Storage::disk('local')->size($file['path']),
                 'url' => $noticeUrl,
             ];
         }
         if ($notice === [] && filled($noticeUrl)) {
+            $name = basename(urldecode((string) (parse_url($noticeUrl, PHP_URL_PATH) ?: 'notice.pdf')));
             $notice[] = [
-                'name' => basename(urldecode((string) (parse_url($noticeUrl, PHP_URL_PATH) ?: 'notice.pdf'))),
+                'key' => $this->attachmentSelectionKey('notice', $name),
+                'name' => $name,
                 'bytes' => 0,
                 'url' => $noticeUrl,
             ];
@@ -325,6 +359,7 @@ final class IncomingFineReplySender
             // Must-attach authorities: resolve real mail attachments (downloads from Wheelsys).
             foreach ($this->rentalContractAttachments($log) as $file) {
                 $contracts[] = [
+                    'key' => $this->attachmentSelectionKey('contract', $file['name']),
                     'name' => $file['name'],
                     'bytes' => (int) Storage::disk('local')->size($file['path']),
                     'url' => null,
@@ -335,6 +370,13 @@ final class IncomingFineReplySender
         } elseif (filled($log->rental_id)) {
             $contracts = $this->mergeSharePointContractUrls($log, []);
         }
+
+        foreach ($contracts as &$row) {
+            if (! isset($row['key']) || $row['key'] === '') {
+                $row['key'] = $this->attachmentSelectionKey('contract', (string) ($row['name'] ?? 'contract.pdf'));
+            }
+        }
+        unset($row);
 
         return [
             'notice' => $notice,

@@ -58,9 +58,23 @@ trait InteractsWithFineInformavimas
     /**
      * Files that would be attached on Send (notice + RNT contracts).
      *
-     * @var array{notice:list<array{name:string,bytes:int}>,contracts:list<array{name:string,bytes:int}>,requires_contract:bool,error:?string}|null
+     * @var array{notice:list<array{key:string,name:string,bytes:int,url?:?string}>,contracts:list<array{key:string,name:string,bytes:int,url?:?string}>,requires_contract:bool,error:?string}|null
      */
     public ?array $sendAttachmentPreview = null;
+
+    /**
+     * Selected attachment keys to include on send (default: all).
+     *
+     * @var list<string>
+     */
+    public array $sendAttachmentSelected = [];
+
+    /**
+     * Keys known from the last preview (used to keep unchecked state across refresh).
+     *
+     * @var list<string>
+     */
+    public array $sendAttachmentKnownKeys = [];
 
     public string $epaslaugosPersonType = EpaslaugosAssist::PERSON_LT_NATURAL;
 
@@ -166,12 +180,17 @@ trait InteractsWithFineInformavimas
         $this->sourceFiles = [];
         $this->informuotiReadiness = null;
         $this->sendAttachmentPreview = null;
+        $this->sendAttachmentSelected = [];
+        $this->sendAttachmentKnownKeys = [];
     }
 
     public function refreshSendAttachmentPreview(): void
     {
         $this->sendAttachmentPreview = null;
         if (! $this->informuotiLogId || ! is_array($this->previewDraft)) {
+            $this->sendAttachmentSelected = [];
+            $this->sendAttachmentKnownKeys = [];
+
             return;
         }
 
@@ -192,6 +211,43 @@ trait InteractsWithFineInformavimas
                 'error' => $e->getMessage(),
             ];
         }
+
+        $this->syncSendAttachmentSelection();
+    }
+
+    /**
+     * Default-select every preview file; keep prior unchecked choices across refresh.
+     */
+    private function syncSendAttachmentSelection(): void
+    {
+        $keys = [];
+        foreach (['notice', 'contracts'] as $group) {
+            foreach ($this->sendAttachmentPreview[$group] ?? [] as $file) {
+                $key = trim((string) ($file['key'] ?? ''));
+                if ($key !== '') {
+                    $keys[] = $key;
+                }
+            }
+        }
+        $keys = array_values(array_unique($keys));
+
+        $prevSelected = $this->sendAttachmentSelected;
+        $prevKnown = $this->sendAttachmentKnownKeys;
+        $selected = [];
+        foreach ($keys as $key) {
+            $isNew = ! in_array($key, $prevKnown, true);
+            if ($isNew || in_array($key, $prevSelected, true)) {
+                $selected[] = $key;
+            }
+        }
+
+        // First open (no known keys yet) → select all.
+        if ($prevKnown === []) {
+            $selected = $keys;
+        }
+
+        $this->sendAttachmentSelected = $selected;
+        $this->sendAttachmentKnownKeys = $keys;
     }
 
     public function fetchRntDocsForInformuoti(): void
@@ -460,6 +516,11 @@ trait InteractsWithFineInformavimas
 
                 return;
             }
+
+            $draft['attach_include_keys'] = array_values(array_unique(array_map(
+                static fn ($key): string => trim((string) $key),
+                $this->sendAttachmentSelected
+            )));
 
             $log = app(IncomingFineReplySender::class)->send($draft, $log);
             $this->informuotiLogId = $log->id;

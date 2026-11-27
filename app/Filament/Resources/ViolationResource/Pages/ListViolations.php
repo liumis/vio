@@ -573,6 +573,7 @@ class ListViolations extends ListRecords
             'epaslaugosPersonType' => $this->epaslaugosPersonType,
             'wheelsAlreadyImported' => $wheelsAlreadyImported,
             'sendAttachmentPreview' => $this->sendAttachmentPreview,
+            'sendAttachmentSelected' => $this->sendAttachmentSelected,
         ]);
     }
 }
