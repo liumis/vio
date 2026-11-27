@@ -51,22 +51,12 @@ class ListViolations extends ListRecords
         $this->browseMode = 'days';
         $this->openViolationGroups = [];
         $this->selectedReplyIds = [];
-        $firstDay = $this->violationDayGroups[0] ?? null;
-        if ($firstDay !== null) {
-            $this->openDayWithFiles($firstDay);
-        }
     }
 
     public function setBrowseMode(string $mode): void
     {
         $this->browseMode = $mode === 'table' ? 'table' : 'days';
         $this->selectedReplyIds = [];
-        if ($this->browseMode === 'days' && $this->openViolationGroups === []) {
-            $firstDay = $this->violationDayGroups[0] ?? null;
-            if ($firstDay !== null) {
-                $this->openDayWithFiles($firstDay);
-            }
-        }
     }
 
     public function updatedBrowseMode(mixed $value): void
@@ -74,12 +64,6 @@ class ListViolations extends ListRecords
         $mode = is_string($value) && $value === 'table' ? 'table' : 'days';
         $this->browseMode = $mode;
         $this->selectedReplyIds = [];
-        if ($mode === 'days' && $this->openViolationGroups === []) {
-            $firstDay = $this->violationDayGroups[0] ?? null;
-            if ($firstDay !== null) {
-                $this->openDayWithFiles($firstDay);
-            }
-        }
     }
 
     public function toggleViolationGroup(string $key): void
@@ -94,40 +78,6 @@ class ListViolations extends ListRecords
         }
 
         $this->openViolationGroups[] = $key;
-
-        // Expanding a day → expand all import files inside it.
-        if (str_starts_with($key, 'day:')) {
-            foreach ($this->violationDayGroups as $day) {
-                if ((string) ($day['key'] ?? '') !== $key) {
-                    continue;
-                }
-                foreach ($day['files'] as $file) {
-                    $fileKey = (string) ($file['key'] ?? '');
-                    if ($fileKey !== '' && ! in_array($fileKey, $this->openViolationGroups, true)) {
-                        $this->openViolationGroups[] = $fileKey;
-                    }
-                }
-                break;
-            }
-        }
-    }
-
-    /**
-     * @param  array{key: string, files: list<array{key: string}>}  $day
-     */
-    private function openDayWithFiles(array $day): void
-    {
-        $keys = [(string) $day['key']];
-        foreach ($day['files'] as $file) {
-            $fileKey = (string) ($file['key'] ?? '');
-            if ($fileKey !== '') {
-                $keys[] = $fileKey;
-            }
-        }
-        $this->openViolationGroups = array_values(array_unique(array_merge(
-            $this->openViolationGroups,
-            $keys
-        )));
     }
 
     public function isViolationGroupOpen(string $key): bool
@@ -257,6 +207,7 @@ class ListViolations extends ListRecords
                 'title' => $file['title'],
                 'subtitle' => implode(' · ', $subtitleParts),
                 'imported_at_label' => $importedAtLabel,
+                'prepared_at' => (string) ($file['subtitle'] ?? ''),
                 'to_send_count' => $toSend,
                 'not_imported_count' => $notImported,
                 'logs' => $file['logs'],
@@ -313,10 +264,10 @@ class ListViolations extends ListRecords
                     return $bCount <=> $aCount;
                 }
 
-                return strcmp(
-                    (string) ($b['imported_at_label'] ?? ''),
-                    (string) ($a['imported_at_label'] ?? '')
-                );
+                $aSort = (string) (($a['imported_at_label'] ?? '') ?: ($a['prepared_at'] ?? ''));
+                $bSort = (string) (($b['imported_at_label'] ?? '') ?: ($b['prepared_at'] ?? ''));
+
+                return strcmp($bSort, $aSort);
             });
 
             $fileCount = count($day['files']);
