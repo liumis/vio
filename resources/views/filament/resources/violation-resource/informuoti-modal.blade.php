@@ -11,12 +11,20 @@
         $inboundFrom = trim((string) (($previewMessage['from_name'] ?? '').' <'.($previewMessage['from_email'] ?? '').'>'));
         $inboundSubject = (string) ($previewMessage['subject'] ?? '');
         $inboundReceived = (string) ($previewMessage['received_at_local'] ?? $previewMessage['received_at'] ?? '');
+        $externalCompany = is_array($wheelsysSelected['_external_company'] ?? null)
+            ? $wheelsysSelected['_external_company']
+            : null;
+        $externalCompanyFilled = is_array($externalCompany)
+            && ($externalCompany['status'] ?? '') === 'filled'
+            && ($externalCompany['filled'] ?? []) !== [];
     @endphp
     <div
         class="fixed inset-0 flex items-start justify-center overflow-y-auto"
         style="z-index: 100; background: rgba(15, 23, 42, 0.5); padding: 24px;"
+        wire:key="informuoti-overlay-{{ $informuotiLogId ?? 'x' }}"
         wire:click.self="closeInformuoti"
         x-data="{ tab: @js($defaultTab) }"
+        x-on:keydown.escape.window="$wire.closeInformuoti()"
     >
         <style>
             .vio-im-tabs {
@@ -88,6 +96,9 @@
         <div
             class="w-full rounded-xl bg-white shadow-xl"
             style="max-width: 56rem; margin: 16px 0; box-shadow: 0 20px 40px rgba(15,23,42,.18); border: 1px solid rgba(15,23,42,.08);"
+            wire:click.stop
+            wire:keydown.enter.stop
+            x-on:click.stop
         >
             <div class="flex items-start justify-between gap-4" style="padding: 20px 24px 12px; border-bottom: 1px solid #eef2f7;">
                 <div style="padding-right: 12px; min-width: 0;">
@@ -299,6 +310,23 @@
                     </div>
                 @endif
 
+                @if ($externalCompanyFilled)
+                    <div style="padding: 12px 24px; border-bottom: 1px solid #fcd34d; background: #fffbeb; color: #92400e;">
+                        <div style="font-size:13px;font-weight:700;">Filled from external source</div>
+                        <div style="font-size:12px;margin-top:2px;">
+                            {{ implode(' + ', array_map(static fn ($f) => $f === 'company_code' ? 'company code' : 'company name', $externalCompany['filled'])) }}
+                            · {{ $externalCompany['display_name'] ?? $externalCompany['name'] ?? '—' }}
+                            @if (! empty($externalCompany['code']))
+                                · {{ $externalCompany['code'] }}
+                            @endif
+                            ({{ $externalCompany['source'] ?? 'rekvizitai.lt / JAR' }})
+                            @if (! empty($externalCompany['rekvizitai_url']))
+                                · <a href="{{ $externalCompany['rekvizitai_url'] }}" target="_blank" rel="noopener" style="color:#b45309;text-decoration:underline;">rekvizitai.lt</a>
+                            @endif
+                        </div>
+                    </div>
+                @endif
+
                 @if ($alreadySent)
                     <div style="padding: 12px 24px; border-bottom: 1px solid #bae6fd; background: #e0f2fe; color: #075985;">
                         <div style="font-size:13px;font-weight:700;">Already sent</div>
@@ -365,8 +393,11 @@
                         <label class="block">
                             <span class="text-xs font-semibold uppercase text-gray-500">To</span>
                             <input
-                                type="email"
-                                wire:model="previewDraft.to"
+                                type="text"
+                                inputmode="email"
+                                autocomplete="email"
+                                wire:model.blur="previewDraft.to"
+                                wire:keydown.enter.prevent
                                 class="mt-1 w-full rounded-lg border-gray-300 text-sm shadow-sm"
                                 style="padding: 10px 12px;"
                                 @disabled($isEpaslaugos)
@@ -378,6 +409,7 @@
                                 type="text"
                                 wire:model.blur="previewDraft.subject"
                                 wire:change="refreshPreviewHtml"
+                                wire:keydown.enter.prevent
                                 class="mt-1 w-full rounded-lg border-gray-300 text-sm shadow-sm"
                                 style="padding: 10px 12px;"
                             />

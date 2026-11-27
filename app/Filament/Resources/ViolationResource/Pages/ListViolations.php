@@ -157,6 +157,11 @@ class ListViolations extends ListRecords
     {
         $logs = ViolationResource::getEloquentQuery()
             ->with(['authority'])
+            // Prefer not-imported rows in the window, then newest import day.
+            ->orderByRaw(
+                'CASE WHEN wheels_import_status = ? THEN 1 ELSE 0 END ASC',
+                [FineProcessLog::WHEELS_IMPORT_IMPORTED]
+            )
             ->orderByDesc('wheels_imported_at')
             ->orderByDesc('id')
             ->limit(800)
@@ -263,7 +268,9 @@ class ListViolations extends ListRecords
                     'fine_count' => 0,
                     'to_send_count' => 0,
                     'not_imported_count' => 0,
-                    'sort' => $dayKey === 'unknown' ? '0000-00-00' : $dayKey,
+                    // Unknown (no import date) sorts above dated days within the same pending/done bucket.
+                    'sort' => $dayKey === 'unknown' ? '9999-12-31' : $dayKey,
+                    'is_unknown' => $dayKey === 'unknown',
                 ];
             }
             $days[$dayKey]['files'][] = $filePayload;
@@ -272,7 +279,9 @@ class ListViolations extends ListRecords
             $days[$dayKey]['not_imported_count'] += $notImported;
         }
 
-        // Days with pending imports first, then by date desc.
+        // 1) Days with not-imported fines first
+        // 2) "No import date" above dated days
+        // 3) Then newest → oldest
         uasort($days, static function (array $a, array $b): int {
             $aPending = ((int) ($a['not_imported_count'] ?? 0)) > 0 ? 1 : 0;
             $bPending = ((int) ($b['not_imported_count'] ?? 0)) > 0 ? 1 : 0;
@@ -280,12 +289,18 @@ class ListViolations extends ListRecords
                 return $bPending <=> $aPending;
             }
 
+            $aUnknown = ! empty($a['is_unknown']) ? 1 : 0;
+            $bUnknown = ! empty($b['is_unknown']) ? 1 : 0;
+            if ($aUnknown !== $bUnknown) {
+                return $bUnknown <=> $aUnknown;
+            }
+
             return strcmp((string) $b['sort'], (string) $a['sort']);
         });
 
         $out = [];
         foreach ($days as $dayKey => $day) {
-            // Files with not-imported rows first inside the day.
+            // Files: not-imported first, then newest import/prepare time.
             usort($day['files'], static function (array $a, array $b): int {
                 $aPending = ((int) ($a['not_imported_count'] ?? 0)) > 0 ? 1 : 0;
                 $bPending = ((int) ($b['not_imported_count'] ?? 0)) > 0 ? 1 : 0;
@@ -293,7 +308,16 @@ class ListViolations extends ListRecords
                     return $bPending <=> $aPending;
                 }
 
-                return ((int) ($b['not_imported_count'] ?? 0)) <=> ((int) ($a['not_imported_count'] ?? 0));
+                $aCount = (int) ($a['not_imported_count'] ?? 0);
+                $bCount = (int) ($b['not_imported_count'] ?? 0);
+                if ($aCount !== $bCount) {
+                    return $bCount <=> $aCount;
+                }
+
+                return strcmp(
+                    (string) ($b['imported_at_label'] ?? ''),
+                    (string) ($a['imported_at_label'] ?? '')
+                );
             });
 
             $fileCount = count($day['files']);
@@ -382,7 +406,15 @@ class ListViolations extends ListRecords
             ->where(function ($q): void {
                 $q->whereNull('wheels_import_status')
                     ->orWhere('wheels_import_status', FineProcessLog::WHEELS_IMPORT_AWAITING)
-                    ->orWhere('wheels_import_status', FineProcessLog::WHEELS_IMPORT_MISSING);
+                    ->orWhere('wheels_import_status', FineProcessLog::WHEELS_IMPORT_MISSING)
+                    // Imported middle bookend rows often lack wheels_violation_id (no Wheels link).
+                    ->orWhere(function ($inner): void {
+                        $inner->where('wheels_import_status', FineProcessLog::WHEELS_IMPORT_IMPORTED)
+                            ->where(function ($idQ): void {
+                                $idQ->whereNull('wheels_violation_id')
+                                    ->orWhere('wheels_violation_id', '');
+                            });
+                    });
             });
 
         if ($fileKey !== null && str_starts_with($fileKey, 'file:')) {
@@ -529,12 +561,13 @@ class ListViolations extends ListRecords
 
         try {
             $result = app(WheelsysRentalDocumentArchiver::class)->archiveForLog($log, force: true);
-            $contractUrl = $log->fresh()->primaryRntContractSharePointUrl();
+            $fresh = $log->fresh();
+            $pdfCount = $fresh ? count($fresh->rntContractPdfSharePointUrls()) : 0;
             Notification::make()
                 ->success()
                 ->title('RNT docs saved')
                 ->body($result['count'].' file(s) → '.$result['folder']
-                    .($contractUrl ? ' · open Contract from the row' : ''))
+                    .($pdfCount > 0 ? ' · '.$pdfCount.' contract PDF link(s) on the row' : ''))
                 ->send();
         } catch (Throwable $e) {
             Notification::make()
@@ -567,6 +600,7 @@ class ListViolations extends ListRecords
 
         return view('filament.resources.violation-resource.informuoti-modal', [
             'showInformuoti' => $this->showInformuoti,
+            'informuotiLogId' => $this->informuotiLogId,
             'previewDraft' => $this->previewDraft,
             'previewMessage' => $this->previewMessage,
             'wheelsysResults' => $this->wheelsysResults,

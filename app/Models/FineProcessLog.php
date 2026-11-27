@@ -186,24 +186,55 @@ class FineProcessLog extends Model
 
     public function primaryRntContractSharePointUrl(): ?string
     {
-        $urls = $this->rntContractSharePointUrls();
-
-        // Prefer signed contract PDFs.
-        foreach ($urls as $url) {
-            $path = strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?: '')));
-            if (str_contains($path, 'signed-') && str_ends_with($path, '.pdf')) {
-                return $url;
-            }
-        }
-
-        foreach ($urls as $url) {
-            $path = strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?: '')));
-            if (str_ends_with($path, '.pdf')) {
-                return $url;
-            }
-        }
+        $urls = $this->rntContractPdfSharePointUrls();
 
         return $urls[0] ?? null;
+    }
+
+    /**
+     * All RNT contract PDFs (signed first). Images from the rental Dropzone are excluded.
+     *
+     * @return list<string>
+     */
+    public function rntContractPdfSharePointUrls(): array
+    {
+        $urls = $this->rntContractSharePointUrls();
+        $signed = [];
+        $otherPdf = [];
+
+        foreach ($urls as $url) {
+            $path = strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?: '')));
+            if (! str_ends_with($path, '.pdf')) {
+                continue;
+            }
+            if (str_contains($path, 'signed-')) {
+                $signed[] = $url;
+            } else {
+                $otherPdf[] = $url;
+            }
+        }
+
+        return array_values(array_unique([...$signed, ...$otherPdf]));
+    }
+
+    /**
+     * Short label for a SharePoint RNT URL button (e.g. Contract, Contract 2, Depo).
+     */
+    public static function rntContractButtonLabel(string $url, int $index, int $total): string
+    {
+        $base = basename(urldecode((string) (parse_url($url, PHP_URL_PATH) ?: 'contract.pdf')));
+        $base = preg_replace('/^rnt-/i', '', $base) ?: $base;
+        $stem = pathinfo($base, PATHINFO_FILENAME);
+        $stem = preg_replace('/-RATLL-\d+$/i', '', (string) $stem) ?: (string) $stem;
+        $stem = preg_replace('/-RNT-\d+$/i', '', $stem) ?: $stem;
+
+        if (str_starts_with(strtolower($stem), 'signed-')) {
+            return $total > 1 ? 'Contract '.($index + 1) : 'Contract';
+        }
+
+        $short = \Illuminate\Support\Str::limit($stem, 18, '…');
+
+        return $short !== '' ? $short : ($total > 1 ? 'Contract '.($index + 1) : 'Contract');
     }
 
     private function isRntSharePointUrl(string $url): bool

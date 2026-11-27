@@ -10,7 +10,8 @@ return [
 
     'url' => env('APP_URL', 'http://localhost'),
 
-    'timezone' => env('APP_TIMEZONE', 'UTC'),
+    // Lithuanian wall-clock for storage + UI (fines ops, documents, deadlines).
+    'timezone' => env('APP_TIMEZONE', 'Europe/Vilnius'),
 
     'locale' => env('APP_LOCALE', 'en'),
 

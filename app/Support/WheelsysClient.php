@@ -544,7 +544,10 @@ final class WheelsysClient
         $raw = is_array($draft['raw'] ?? null) ? $draft['raw'] : [];
         $corporateName = trim((string) ($draft['corporate'] ?? $raw['Corporate_Name'] ?? ''));
         if ($corporateName === '') {
-            return $draft;
+            $draft['party'] = 'corporate';
+
+            // Name missing but code may exist ? try external JAR / rekvizitai fill.
+            return $this->enrichCorporateFromExternalRegister($draft);
         }
 
         if (! filled($draft['driver'] ?? null)) {
@@ -560,14 +563,14 @@ final class WheelsysClient
             $draft['party'] = 'corporate';
             $draft['_corporate_enriched'] = true;
 
-            return $draft;
+            return $this->enrichCorporateFromExternalRegister($draft);
         }
 
         $corporate = $this->findCorporate(name: $corporateName);
         if ($corporate === null) {
             $draft['party'] = 'corporate';
 
-            return $draft;
+            return $this->enrichCorporateFromExternalRegister($draft);
         }
 
         $address = trim((string) ($corporate['address'] ?? ''));
@@ -605,6 +608,65 @@ final class WheelsysClient
         $draft['party'] = 'corporate';
         $draft['_corporate_enriched'] = true;
         $draft['corporate_id'] = $corporate['id'] ?? null;
+
+        return $this->enrichCorporateFromExternalRegister($draft);
+    }
+
+    /**
+     * When Wheelsys has company name XOR code, fill the missing side from rekvizitai / JAR.
+     *
+     * @param  array<string, mixed>  $draft
+     * @return array<string, mixed>
+     */
+    private function enrichCorporateFromExternalRegister(array $draft): array
+    {
+        $lookup = app(LithuanianCompanyLookup::class);
+        $name = trim((string) ($draft['corporate'] ?? $draft['driver'] ?? ''));
+        $code = $lookup->normalizeCompanyCode((string) (
+            $draft['corporate_tax_id']
+            ?? $draft['driver_tax_id']
+            ?? $draft['company_code']
+            ?? $draft['corporate_code']
+            ?? ''
+        ));
+
+        $resolved = $lookup->resolve($name, $code);
+        if ($resolved === null) {
+            return $draft;
+        }
+
+        $draft['_external_company'] = $resolved;
+
+        if (($resolved['status'] ?? '') !== 'filled' || ($resolved['filled'] ?? []) === []) {
+            return $draft;
+        }
+
+        $resolvedName = trim((string) ($resolved['display_name'] ?? $resolved['name'] ?? ''));
+        $resolvedCode = $lookup->normalizeCompanyCode((string) ($resolved['code'] ?? ''));
+
+        if (in_array('company', $resolved['filled'], true) && $resolvedName !== '') {
+            $draft['corporate'] = $resolvedName;
+            $draft['driver'] = $resolvedName;
+        }
+        if (in_array('company_code', $resolved['filled'], true) && $resolvedCode !== '') {
+            $draft['corporate_tax_id'] = $resolvedCode;
+            $draft['company_code'] = $resolvedCode;
+            if (! filled($draft['driver_tax_id'] ?? null)) {
+                $draft['driver_tax_id'] = $resolvedCode;
+            }
+        }
+
+        ActivityLogger::log(
+            'Company data filled from external source'
+                .($resolvedName !== '' ? ' · '.$resolvedName : '')
+                .($resolvedCode !== '' ? ' · '.$resolvedCode : ''),
+            meta: [
+                'source' => $resolved['source'] ?? 'rekvizitai.lt / JAR',
+                'filled' => $resolved['filled'],
+                'query' => $resolved['query'] ?? null,
+                'rekvizitai_url' => $resolved['rekvizitai_url'] ?? null,
+            ]
+        );
 
         return $draft;
     }
@@ -721,7 +783,15 @@ final class WheelsysClient
             'zip' => $row['ZipCode'] ?? null,
             'country' => $row['CountryName'] ?? null,
             'email' => $row['Email'] ?? null,
-            'phone' => $row['Telephone'] ?? null,
+            // Wheelsys Contact info has two telephone fields ? use whichever is filled.
+            'phone' => $this->firstFilledPhone(
+                $row['Telephone'] ?? null,
+                $row['Telephone2'] ?? null,
+                $row['MobilePhone'] ?? null,
+                $row['Mobile'] ?? null,
+                $row['Phone'] ?? null,
+                $row['Phone2'] ?? null,
+            ),
             'raw' => $row,
         ];
     }
@@ -884,7 +954,15 @@ final class WheelsysClient
             'country' => $row['CountryName'] ?? null,
             'state' => $row['State'] ?? null,
             'email' => $row['Email'] ?? null,
-            'phone' => $row['Telephone'] ?? $row['MobilePhone'] ?? null,
+            // Wheelsys Contact info has two telephone fields ? use whichever is filled.
+            'phone' => $this->firstFilledPhone(
+                $row['Telephone'] ?? null,
+                $row['Telephone2'] ?? null,
+                $row['MobilePhone'] ?? null,
+                $row['Mobile'] ?? null,
+                $row['Phone'] ?? null,
+                $row['Phone2'] ?? null,
+            ),
             'birth_date' => $birthDate,
             'license' => $row['LicNo'] ?? null,
             'licence_issue_date' => $this->dateOnly($row['LicIssueDate'] ?? null),
@@ -947,7 +1025,12 @@ final class WheelsysClient
             'agr_no' => $row['RADocNo'] ?? null,
             'driver' => $row['DriverNAME'] ?? null,
             'customer_email' => $row['Email'] ?? null,
-            'driver_telephone' => $row['drv_Phone1'] ?? null,
+            'driver_telephone' => $this->firstFilledPhone(
+                $row['drv_Phone1'] ?? null,
+                $row['drv_Phone2'] ?? null,
+                $row['DriverPhone'] ?? null,
+                $row['DriverPhone2'] ?? null,
+            ),
             'driver_address' => $row['drv_Address'] ?? null,
             'driver_city' => $row['drv_City'] ?? null,
             'driver_country' => $row['drv_Country'] ?? null,
@@ -998,7 +1081,12 @@ final class WheelsysClient
             'corporate' => $row['Corporate_Name'] ?? null,
             'agent' => $row['Agent_Name'] ?? null,
             'customer_email' => $row['DriverEmail'] ?? null,
-            'driver_telephone' => $row['DriverPhone'] ?? $row['DriverPhone2'] ?? null,
+            'driver_telephone' => $this->firstFilledPhone(
+                $row['DriverPhone'] ?? null,
+                $row['DriverPhone2'] ?? null,
+                $row['drv_Phone1'] ?? null,
+                $row['drv_Phone2'] ?? null,
+            ),
             'driver_address' => null,
             'driver_city' => null,
             'driver_country' => null,
@@ -1230,6 +1318,21 @@ final class WheelsysClient
         }
 
         return substr((string) $value, 0, 10);
+    }
+
+    /**
+     * Wheelsys often has two contact telephone inputs; pick the first non-empty.
+     */
+    private function firstFilledPhone(mixed ...$candidates): ?string
+    {
+        foreach ($candidates as $candidate) {
+            $phone = trim((string) ($candidate ?? ''));
+            if ($phone !== '') {
+                return $phone;
+            }
+        }
+
+        return null;
     }
 
     private function hasTimeComponent(string $value): bool

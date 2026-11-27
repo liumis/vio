@@ -236,7 +236,8 @@
                                                                 $bulkSendable = $this->rowIsBulkSendable($log);
                                                                 $isImported = $log->wheels_import_status === \App\Models\FineProcessLog::WHEELS_IMPORT_IMPORTED;
                                                                 $docUrl = $log->documentSharePointUrl();
-                                                                $rntUrl = $log->primaryRntContractSharePointUrl();
+                                                                $rntPdfUrls = $log->rntContractPdfSharePointUrls();
+                                                                $rntUrl = $rntPdfUrls[0] ?? null;
                                                                 $needsContract = $log->authority?->requiresContract() === true
                                                                     || str_contains(mb_strtolower((string) ($log->authority_name ?? ''), 'UTF-8'), 'julianus');
                                                                 $tvUrl = filled($log->wheels_violation_id)
@@ -351,10 +352,20 @@
                                                                             Doc
                                                                         </x-filament::button>
                                                                     @endif
-                                                                    @if ($rntUrl)
-                                                                        <x-filament::button tag="a" size="xs" color="warning" :href="$rntUrl" target="_blank" rel="noopener noreferrer">
-                                                                            Contract
-                                                                        </x-filament::button>
+                                                                    @if ($rntPdfUrls !== [])
+                                                                        @foreach ($rntPdfUrls as $rntIdx => $rntPdfUrl)
+                                                                            <x-filament::button
+                                                                                tag="a"
+                                                                                size="xs"
+                                                                                color="warning"
+                                                                                :href="$rntPdfUrl"
+                                                                                target="_blank"
+                                                                                rel="noopener noreferrer"
+                                                                                :title="basename(urldecode((string) (parse_url($rntPdfUrl, PHP_URL_PATH) ?: 'contract.pdf')))"
+                                                                            >
+                                                                                {{ \App\Models\FineProcessLog::rntContractButtonLabel($rntPdfUrl, $rntIdx, count($rntPdfUrls)) }}
+                                                                            </x-filament::button>
+                                                                        @endforeach
                                                                     @elseif ($needsContract && filled($log->rental_id))
                                                                         <x-filament::button size="xs" color="warning" wire:click="fetchRntDocs({{ (int) $log->id }})" wire:loading.attr="disabled">
                                                                             Fetch contract

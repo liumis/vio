@@ -68,7 +68,7 @@ class ActivityLogResource extends Resource
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('Time')
                     ->dateTime()
-                    ->timezone('Europe/Vilnius')
+                    ->timezone(config('app.timezone'))
                     ->sortable(),
                 Tables\Columns\TextColumn::make('user_name')
                     ->label('Username')
@@ -175,7 +175,7 @@ class ActivityLogResource extends Resource
         }
 
         $status = (string) ($violation->last_email_status ?? '-');
-        $sentAt = $violation->last_email_sent_at?->timezone('Europe/Vilnius')->format('Y-m-d H:i:s') ?? '-';
+        $sentAt = $violation->last_email_sent_at?->timezone(config('app.timezone'))->format('Y-m-d H:i:s') ?? '-';
         $to = (string) ($violation->last_email_to ?? '-');
         $subject = (string) ($violation->last_email_subject ?? '-');
         $body = (string) ($violation->last_email_body ?? '');

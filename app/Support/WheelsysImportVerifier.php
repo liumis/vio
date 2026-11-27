@@ -44,6 +44,10 @@ class WheelsysImportVerifier
             }
 
             if ($log->wheels_import_status === FineProcessLog::WHEELS_IMPORT_IMPORTED) {
+                // Already imported but no deep-link id (typical middle bookend rows) — fill id only.
+                if (! filled($log->wheels_violation_id)) {
+                    $this->fillMissingViolationId($log);
+                }
                 $skipped++;
 
                 continue;
@@ -169,18 +173,30 @@ class WheelsysImportVerifier
 
         foreach ($batchLogs as $log) {
             $match = null;
+            $fromBookend = false;
             if ($log->id === $firstId) {
                 $match = $firstMatch;
+                $fromBookend = true;
             } elseif ($log->id === $lastId) {
                 $match = $lastMatch;
+                $fromBookend = true;
+            } else {
+                // Bookends already proved the file landed — still resolve TV id
+                // so the Imported list can deep-link each middle row to Wheels.
+                try {
+                    $match = $this->findMatch($log);
+                } catch (Throwable) {
+                    $match = null;
+                }
             }
 
-            // Middle rows: no extra Wheels calls — first+last already proved the file landed.
             $state = isset($match['state']) ? (string) $match['state'] : null;
             $paidDate = filled($match['paid_date'] ?? null) ? (string) $match['paid_date'] : null;
-            $detail = $match !== null
-                ? $this->detailFromMatch($match).' · bookend'
-                : 'Batch imported (first+last found in Wheels)';
+            if ($match !== null) {
+                $detail = $this->detailFromMatch($match).($fromBookend ? ' · bookend' : ' · batch');
+            } else {
+                $detail = 'Batch imported (first+last found in Wheels; TV id not resolved)';
+            }
 
             $log->fill([
                 'wheels_import_status' => FineProcessLog::WHEELS_IMPORT_IMPORTED,
@@ -292,6 +308,31 @@ class WheelsysImportVerifier
         } catch (Throwable) {
             // Non-fatal — import status already saved.
         }
+    }
+
+    /**
+     * Resolve Wheelsys TV entity id for an already-imported row (enables Wheels deep-link).
+     */
+    private function fillMissingViolationId(FineProcessLog $log): void
+    {
+        try {
+            $match = $this->findMatch($log);
+        } catch (Throwable) {
+            return;
+        }
+
+        if ($match === null || ! isset($match['id'])) {
+            return;
+        }
+
+        $log->fill([
+            'wheels_violation_id' => (string) $match['id'],
+            'wheels_tv_state' => isset($match['state']) ? (string) $match['state'] : $log->wheels_tv_state,
+            'wheels_paid_date' => filled($match['paid_date'] ?? null)
+                ? (string) $match['paid_date']
+                : $log->wheels_paid_date,
+            'wheels_verify_detail' => $this->detailFromMatch($match).' · id backfill',
+        ])->save();
     }
 
     /**

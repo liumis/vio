@@ -43,15 +43,21 @@ class CloudDeploy extends Command
         $this->output->write(Artisan::output());
 
         $this->newLine();
+        $timezone = (string) config('app.timezone');
         $this->table(
             ['Check', 'Value'],
             [
                 ['users', Schema::hasTable('users') ? (string) User::query()->count() : 'n/a'],
                 ['authorities', Schema::hasTable('authorities') ? (string) Authority::query()->count() : 'n/a'],
                 ['email_settings', Schema::hasTable('email_settings') ? (string) EmailSetting::query()->count() : 'n/a'],
+                ['APP_TIMEZONE', $timezone],
                 ['VIO_BOOTSTRAP_PASSWORD', filled(config('vio.bootstrap_password')) ? 'set' : 'MISSING (new users skipped)'],
             ]
         );
+
+        if (strcasecmp($timezone, 'Europe/Vilnius') !== 0) {
+            $this->warn('APP_TIMEZONE is "'.$timezone.'". Set Cloud Variable APP_TIMEZONE=Europe/Vilnius so fines ops store LT wall-clock.');
+        }
 
         if (Schema::hasTable('users') && User::query()->count() === 0) {
             $this->warn('No users in DB. Set VIO_BOOTSTRAP_PASSWORD in Cloud Variables and re-run: php artisan vio:cloud-deploy');

@@ -691,6 +691,9 @@
             <div
                 class="w-full rounded-xl bg-white shadow-xl"
                 style="max-width: 64rem; margin: 16px 0; box-shadow: 0 20px 40px rgba(15,23,42,.18); border: 1px solid rgba(15,23,42,.08);"
+                wire:click.stop
+                wire:keydown.enter.stop
+                x-on:click.stop
             >
                 <div
                     class="flex items-start justify-between gap-4"
@@ -1014,8 +1017,11 @@
                         <label class="block">
                             <span class="text-xs font-semibold uppercase text-gray-500">To</span>
                             <input
-                                type="email"
-                                wire:model="previewDraft.to"
+                                type="text"
+                                inputmode="email"
+                                autocomplete="email"
+                                wire:model.blur="previewDraft.to"
+                                wire:keydown.enter.prevent
                                 class="mt-1 w-full rounded-lg border-gray-300 text-sm shadow-sm"
                                 style="padding: 10px 12px;"
                                 placeholder="{{ ($previewDraft['reply_channel'] ?? '') === 'epaslaugos' ? '— ePaslaugos (ne el. paštas) —' : '' }}"
@@ -1024,7 +1030,7 @@
                         </label>
                         <label class="block">
                             <span class="text-xs font-semibold uppercase text-gray-500">Subject</span>
-                            <input type="text" wire:model.blur="previewDraft.subject" wire:change="refreshPreviewHtml" class="mt-1 w-full rounded-lg border-gray-300 text-sm shadow-sm" style="padding: 10px 12px;" />
+                            <input type="text" wire:model.blur="previewDraft.subject" wire:change="refreshPreviewHtml" wire:keydown.enter.prevent class="mt-1 w-full rounded-lg border-gray-300 text-sm shadow-sm" style="padding: 10px 12px;" />
                         </label>
                         <div class="text-xs text-gray-500" style="padding-top: 4px; line-height: 1.5;">
                             From: {{ $previewDraft['from_name'] ?? '' }} &lt;{{ $previewDraft['from_email'] ?? '' }}&gt;

@@ -1349,9 +1349,40 @@ class IncomingFines extends Page implements HasForms
                     ->body(($row['driver'] ?? '—').' / '.($row['vehicle'] ?? '—'))
                     ->send();
             }
+            $this->notifyExternalCompanyFill($row);
         } catch (Throwable $e) {
             Notification::make()->danger()->title('Could not rebuild draft')->body($e->getMessage())->send();
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    private function notifyExternalCompanyFill(array $row): void
+    {
+        $ext = is_array($row['_external_company'] ?? null) ? $row['_external_company'] : null;
+        if ($ext === null || ($ext['status'] ?? '') !== 'filled' || ($ext['filled'] ?? []) === []) {
+            return;
+        }
+
+        $parts = [];
+        if (in_array('company', $ext['filled'], true)) {
+            $parts[] = 'company name';
+        }
+        if (in_array('company_code', $ext['filled'], true)) {
+            $parts[] = 'company code';
+        }
+
+        Notification::make()
+            ->warning()
+            ->title('Filled from external source')
+            ->body(
+                implode(' + ', $parts)
+                .' · '.($ext['display_name'] ?? $ext['name'] ?? '—')
+                .(filled($ext['code'] ?? null) ? ' · '.$ext['code'] : '')
+                .' ('.($ext['source'] ?? 'rekvizitai.lt / JAR').')'
+            )
+            ->send();
     }
 
     private function syncPreviewBackToResults(): void
