@@ -214,7 +214,7 @@ class FineProcessLog extends Model
             }
         }
 
-        return array_values(array_unique([...$signed, ...$otherPdf]));
+        return array_values(array_unique(array_merge($signed, $otherPdf)));
     }
 
     /**

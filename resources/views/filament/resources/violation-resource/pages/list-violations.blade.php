@@ -354,6 +354,9 @@
                                                                     @endif
                                                                     @if ($rntPdfUrls !== [])
                                                                         @foreach ($rntPdfUrls as $rntIdx => $rntPdfUrl)
+                                                                            @php
+                                                                                $rntTitle = basename(urldecode((string) (parse_url($rntPdfUrl, PHP_URL_PATH) ?: 'contract.pdf')));
+                                                                            @endphp
                                                                             <x-filament::button
                                                                                 tag="a"
                                                                                 size="xs"
@@ -361,7 +364,7 @@
                                                                                 :href="$rntPdfUrl"
                                                                                 target="_blank"
                                                                                 rel="noopener noreferrer"
-                                                                                :title="basename(urldecode((string) (parse_url($rntPdfUrl, PHP_URL_PATH) ?: 'contract.pdf')))"
+                                                                                :title="$rntTitle"
                                                                             >
                                                                                 {{ \App\Models\FineProcessLog::rntContractButtonLabel($rntPdfUrl, $rntIdx, count($rntPdfUrls)) }}
                                                                             </x-filament::button>
